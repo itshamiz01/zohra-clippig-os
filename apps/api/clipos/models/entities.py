@@ -1,0 +1,1422 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from clipos.core.enums import (
+    ActionClass,
+    ApprovalStatus,
+    AssetSource,
+    AssetState,
+    AuditOutcome,
+    CandidateReviewAction,
+    CandidateState,
+    DestinationPlatform,
+    DiarizationState,
+    DiscoveryRunState,
+    DiscoveryStrategy,
+    EvidenceSource,
+    GateCheckpoint,
+    GateOutcome,
+    GateReviewAction,
+    JobState,
+    MediaKind,
+    MembershipStatus,
+    OAuthConnectionState,
+    ProviderMode,
+    PublishEventKind,
+    PublishingProvider,
+    PublishState,
+    PublishVisibility,
+    QualityCheckKind,
+    QualityCheckStatus,
+    QualitySeverity,
+    RenderState,
+    RightsBasis,
+    RightsEvidenceStatus,
+    RightsScope,
+    Role,
+    TenantStatus,
+    TranscriptState,
+)
+from clipos.database import Base
+
+JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class UUIDPrimaryKeyMixin:
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "tenants"
+
+    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[TenantStatus] = mapped_column(
+        Enum(TenantStatus, name="tenant_status"), default=TenantStatus.ACTIVE, nullable=False
+    )
+
+    memberships: Mapped[list[TenantMembership]] = relationship(
+        back_populates="tenant", cascade="all, delete-orphan"
+    )
+
+
+class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "users"
+
+    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    memberships: Mapped[list[TenantMembership]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class TenantMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "tenant_memberships"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", name="uq_membership_tenant_user"),
+        Index("ix_memberships_tenant_role", "tenant_id", "role"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[Role] = mapped_column(Enum(Role, name="role"), nullable=False)
+    status: Mapped[MembershipStatus] = mapped_column(
+        Enum(MembershipStatus, name="membership_status"),
+        default=MembershipStatus.ACTIVE,
+        nullable=False,
+    )
+
+    tenant: Mapped[Tenant] = relationship(back_populates="memberships")
+    user: Mapped[User] = relationship(back_populates="memberships")
+
+
+class AuditEvent(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_tenant_created", "tenant_id", "created_at"),
+        Index("ix_audit_resource", "resource_type", "resource_id"),
+    )
+
+    tenant_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=True
+    )
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(160), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    resource_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    outcome: Mapped[AuditOutcome] = mapped_column(
+        Enum(AuditOutcome, name="audit_outcome"), nullable=False
+    )
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_data: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class ApprovalRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "approval_requests"
+    __table_args__ = (
+        Index("ix_approvals_tenant_status", "tenant_id", "status"),
+        CheckConstraint(
+            "decided_by_user_id IS NULL OR decided_by_user_id != requested_by_user_id",
+            name="different_decider",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    decided_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    action_class: Mapped[ActionClass] = mapped_column(
+        Enum(ActionClass, name="action_class"), nullable=False
+    )
+    action_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[ApprovalStatus] = mapped_column(
+        Enum(ApprovalStatus, name="approval_status"),
+        default=ApprovalStatus.PENDING,
+        nullable=False,
+    )
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class BackgroundJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "background_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "kind", "idempotency_key", name="uq_job_tenant_kind_idempotency"
+        ),
+        Index("ix_jobs_tenant_state_created", "tenant_id", "state", "created_at"),
+        Index("ix_jobs_kind_state_heartbeat", "kind", "state", "heartbeat_at"),
+        CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
+        CheckConstraint("max_attempts >= 1", name="max_attempts_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(100), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    state: Mapped[JobState] = mapped_column(
+        Enum(JobState, name="job_state"), default=JobState.QUEUED, nullable=False
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Asset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "assets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "checksum_sha256", name="uq_asset_tenant_checksum"),
+        Index("ix_assets_tenant_state_created", "tenant_id", "state", "created_at"),
+        Index("ix_assets_tenant_filename", "tenant_id", "original_filename"),
+        CheckConstraint("size_bytes >= 0", name="size_nonnegative"),
+        CheckConstraint(
+            "progress_percent >= 0 AND progress_percent <= 100",
+            name="progress_range",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    submitted_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    processing_job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("background_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source: Mapped[AssetSource] = mapped_column(
+        Enum(AssetSource, name="asset_source"), nullable=False
+    )
+    state: Mapped[AssetState] = mapped_column(
+        Enum(AssetState, name="asset_state"), default=AssetState.RECEIVED, nullable=False
+    )
+    media_kind: Mapped[MediaKind] = mapped_column(
+        Enum(MediaKind, name="media_kind"), default=MediaKind.UNKNOWN, nullable=False
+    )
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    safe_extension: Mapped[str] = mapped_column(String(16), nullable=False)
+    declared_content_type: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    detected_content_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(700), nullable=False)
+    derived_audio_storage_key: Mapped[str | None] = mapped_column(String(700), nullable=True)
+    derived_audio_checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    permission_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    rights_note: Mapped[str] = mapped_column(Text, nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processing_stage: Mapped[str] = mapped_column(String(80), default="received", nullable=False)
+    metadata_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class MediaMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "media_metadata"
+    __table_args__ = (
+        UniqueConstraint("asset_id", name="uq_media_metadata_asset"),
+        Index("ix_media_metadata_tenant_asset", "tenant_id", "asset_id"),
+        CheckConstraint("duration_seconds >= 0", name="duration_nonnegative"),
+        CheckConstraint("width IS NULL OR width > 0", name="width_positive"),
+        CheckConstraint("height IS NULL OR height > 0", name="height_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+    )
+    format_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    bit_rate: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    has_video: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    has_audio: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    video_codec: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    audio_codec: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frame_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    audio_channels: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_sample_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    probe_version: Mapped[str] = mapped_column(String(160), nullable=False)
+    probe_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class Transcript(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "transcripts"
+    __table_args__ = (
+        UniqueConstraint("asset_id", name="uq_transcript_asset"),
+        Index("ix_transcript_tenant_state", "tenant_id", "state"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+    )
+    state: Mapped[TranscriptState] = mapped_column(
+        Enum(TranscriptState, name="transcript_state"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    language: Mapped[str | None] = mapped_column(String(35), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    diarization_state: Mapped[DiarizationState] = mapped_column(
+        Enum(DiarizationState, name="diarization_state"), nullable=False
+    )
+    original_text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key_topics: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    raw_provider_output: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    word_timestamps_available: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    segment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    provider_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
+class TranscriptSegment(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "transcript_segments"
+    __table_args__ = (
+        UniqueConstraint("transcript_id", "ordinal", name="uq_segment_transcript_ordinal"),
+        Index("ix_segment_tenant_transcript", "tenant_id", "transcript_id", "ordinal"),
+        CheckConstraint("start_ms >= 0", name="start_nonnegative"),
+        CheckConstraint("end_ms > start_ms", name="time_order"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    transcript_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    speaker_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class TranscriptWord(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "transcript_words"
+    __table_args__ = (
+        UniqueConstraint("transcript_id", "ordinal", name="uq_word_transcript_ordinal"),
+        Index("ix_word_tenant_transcript", "tenant_id", "transcript_id", "ordinal"),
+        CheckConstraint("start_ms >= 0", name="start_nonnegative"),
+        CheckConstraint("end_ms >= start_ms", name="time_order"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    transcript_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    segment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("transcript_segments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(String(500), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    speaker_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class TranscriptChunk(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "transcript_chunks"
+    __table_args__ = (
+        UniqueConstraint("transcript_id", "ordinal", name="uq_chunk_transcript_ordinal"),
+        Index("ix_chunk_tenant_transcript", "tenant_id", "transcript_id", "ordinal"),
+        CheckConstraint("start_ms >= 0", name="start_nonnegative"),
+        CheckConstraint("end_ms > start_ms", name="time_order"),
+        CheckConstraint("char_start >= 0", name="char_start_nonnegative"),
+        CheckConstraint("char_end >= char_start", name="char_order"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    transcript_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_segment_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_segment_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    topics: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
+class DiscoveryRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "discovery_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "asset_id", "input_hash", name="uq_discovery_tenant_asset_input"
+        ),
+        Index("ix_discovery_tenant_state_created", "tenant_id", "state", "created_at"),
+        CheckConstraint("candidate_count >= 0", name="candidate_count_nonnegative"),
+        CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="latency_nonnegative"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+    )
+    transcript_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    state: Mapped[DiscoveryRunState] = mapped_column(
+        Enum(DiscoveryRunState, name="discovery_run_state"), nullable=False
+    )
+    strategy: Mapped[DiscoveryStrategy] = mapped_column(
+        Enum(DiscoveryStrategy, name="discovery_strategy"), nullable=False
+    )
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    score_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    configuration: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_mode: Mapped[ProviderMode] = mapped_column(
+        Enum(ProviderMode, name="provider_mode"), nullable=False
+    )
+    model_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    model_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost: Mapped[Decimal] = mapped_column(
+        Numeric(precision=18, scale=8), default=Decimal("0"), nullable=False
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ClipCandidate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "clip_candidates"
+    __table_args__ = (
+        UniqueConstraint("discovery_run_id", "rank", name="uq_candidate_run_rank"),
+        Index("ix_candidates_tenant_asset_state", "tenant_id", "asset_id", "state"),
+        Index("ix_candidates_tenant_score", "tenant_id", "overall_score"),
+        CheckConstraint("start_ms >= 0", name="start_nonnegative"),
+        CheckConstraint("end_ms > start_ms", name="time_order"),
+        CheckConstraint("speech_start_ms >= start_ms", name="speech_start_in_window"),
+        CheckConstraint("speech_end_ms <= end_ms", name="speech_end_in_window"),
+        CheckConstraint("speech_end_ms > speech_start_ms", name="speech_time_order"),
+        CheckConstraint("overall_score >= 0 AND overall_score <= 100", name="score_range"),
+        CheckConstraint(
+            "recommendation_confidence >= 0 AND recommendation_confidence <= 1",
+            name="confidence_range",
+        ),
+        CheckConstraint("rank >= 1", name="rank_positive"),
+        CheckConstraint("boundary_revision >= 1", name="revision_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+    )
+    transcript_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("transcripts.id", ondelete="CASCADE"), nullable=False
+    )
+    discovery_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("discovery_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    parent_candidate_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="SET NULL"), nullable=True
+    )
+    state: Mapped[CandidateState] = mapped_column(
+        Enum(CandidateState, name="candidate_state"), nullable=False
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    speech_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    speech_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_segment_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_segment_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    transcript_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str | None] = mapped_column(String(35), nullable=True)
+    transcript_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recommendation_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    overall_score: Mapped[float] = mapped_column(Float, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    topics: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    risk_flags: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    model_provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    model_request_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    model_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    word_timestamps_available: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    score_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    boundary_revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CandidateScoreComponent(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "candidate_score_components"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "key", name="uq_score_candidate_key"),
+        Index("ix_score_tenant_candidate", "tenant_id", "candidate_id"),
+        CheckConstraint("score IS NULL OR (score >= 0 AND score <= 100)", name="score_range"),
+        CheckConstraint("weight > 0", name="weight_positive"),
+        CheckConstraint("weighted_score >= 0", name="weighted_nonnegative"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    candidate_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    meaning: Mapped[str] = mapped_column(String(500), nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False)
+    weighted_score: Mapped[float] = mapped_column(Float, nullable=False)
+    applicable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    missing_behavior: Mapped[str] = mapped_column(String(160), nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
+class CandidateTopic(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "candidate_topics"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "normalized_topic", name="uq_candidate_topic_normalized"),
+        Index("ix_candidate_topic_lookup", "tenant_id", "normalized_topic", "candidate_id"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    candidate_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    topic: Mapped[str] = mapped_column(String(80), nullable=False)
+    normalized_topic: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
+class CandidateReview(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "candidate_reviews"
+    __table_args__ = (Index("ix_review_tenant_candidate", "tenant_id", "candidate_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    candidate_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="CASCADE"), nullable=False
+    )
+    previous_candidate_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewer_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    action: Mapped[CandidateReviewAction] = mapped_column(
+        Enum(CandidateReviewAction, name="candidate_review_action"), nullable=False
+    )
+    from_state: Mapped[CandidateState] = mapped_column(
+        Enum(CandidateState, name="candidate_state"), nullable=False
+    )
+    to_state: Mapped[CandidateState] = mapped_column(
+        Enum(CandidateState, name="candidate_state"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_bounds: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    new_bounds: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class TenantRenderProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "tenant_render_profiles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_render_profile_tenant"),
+        CheckConstraint("branding_opacity >= 0.1 AND branding_opacity <= 1", name="opacity_range"),
+        CheckConstraint(
+            "branding_font_size >= 12 AND branding_font_size <= 144", name="font_size_range"
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    updated_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    branding_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    branding_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    branding_position: Mapped[str] = mapped_column(String(32), default="top_right", nullable=False)
+    branding_opacity: Mapped[float] = mapped_column(Float, default=0.85, nullable=False)
+    branding_font_size: Mapped[int] = mapped_column(Integer, default=36, nullable=False)
+
+
+class RenderPlan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "render_plans"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_render_plan_tenant_idempotency"),
+        Index(
+            "ix_render_plans_tenant_candidate_created", "tenant_id", "candidate_id", "created_at"
+        ),
+        CheckConstraint("source_start_ms >= 0", name="source_start_nonnegative"),
+        CheckConstraint("source_end_ms > source_start_ms", name="source_time_order"),
+        CheckConstraint(
+            "duration_ms = source_end_ms - source_start_ms", name="duration_matches_bounds"
+        ),
+        CheckConstraint("duration_ms > 0", name="duration_positive"),
+        CheckConstraint("width > 0 AND height > 0", name="dimensions_positive"),
+        CheckConstraint("frame_rate > 0", name="frame_rate_positive"),
+        CheckConstraint("source_boundary_revision >= 1", name="boundary_revision_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    candidate_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="RESTRICT"), nullable=False
+    )
+    transcript_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("transcripts.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    plan_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    renderer_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preset: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_boundary_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    aspect_ratio: Mapped[str] = mapped_column(String(20), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    frame_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    crop_strategy_requested: Mapped[str] = mapped_column(String(40), nullable=False)
+    crop_strategy_applied: Mapped[str] = mapped_column(String(40), nullable=False)
+    smart_crop_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    crop_fallback_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    caption_mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    caption_style: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    safe_area: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    overlays: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    branding_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    audio_settings: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    video_codec: Mapped[str] = mapped_column(String(40), nullable=False)
+    audio_codec: Mapped[str] = mapped_column(String(40), nullable=False)
+    container: Mapped[str] = mapped_column(String(20), nullable=False)
+    output_storage_prefix: Mapped[str] = mapped_column(String(700), nullable=False)
+    source_time_mapping: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    limitations: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+
+
+class RenderCaptionSegment(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "render_caption_segments"
+    __table_args__ = (
+        UniqueConstraint("render_plan_id", "ordinal", name="uq_render_caption_plan_ordinal"),
+        Index("ix_render_caption_tenant_plan", "tenant_id", "render_plan_id", "ordinal"),
+        CheckConstraint("ordinal >= 0", name="ordinal_nonnegative"),
+        CheckConstraint("source_start_ms >= 0", name="source_start_nonnegative"),
+        CheckConstraint("source_end_ms > source_start_ms", name="source_time_order"),
+        CheckConstraint("output_start_ms >= 0", name="output_start_nonnegative"),
+        CheckConstraint("output_end_ms > output_start_ms", name="output_time_order"),
+        CheckConstraint("line_count >= 1 AND line_count <= 2", name="line_count_range"),
+        CheckConstraint("character_count > 0", name="character_count_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    line_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    character_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    timing_source: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class RenderJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "render_jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "render_plan_id", name="uq_render_job_tenant_plan"),
+        UniqueConstraint("background_job_id", name="uq_render_job_background_job"),
+        Index("ix_render_jobs_tenant_state_created", "tenant_id", "state", "created_at"),
+        CheckConstraint("progress_percent >= 0 AND progress_percent <= 100", name="progress_range"),
+        CheckConstraint("attempt_count >= 0", name="attempt_count_nonnegative"),
+        CheckConstraint("max_attempts >= 1", name="max_attempts_positive"),
+        CheckConstraint("elapsed_ms IS NULL OR elapsed_ms >= 0", name="elapsed_nonnegative"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_plans.id", ondelete="RESTRICT"), nullable=False
+    )
+    background_job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    state: Mapped[RenderState] = mapped_column(
+        Enum(RenderState, name="render_state"), default=RenderState.QUEUED, nullable=False
+    )
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    stage: Mapped[str] = mapped_column(String(80), default="queued", nullable=False)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    renderer_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    failure_details: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RenderOutput(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "render_outputs"
+    __table_args__ = (
+        UniqueConstraint("render_job_id", "attempt_number", name="uq_render_output_job_attempt"),
+        UniqueConstraint("tenant_id", "storage_key", name="uq_render_output_tenant_storage"),
+        Index("ix_render_outputs_tenant_job_current", "tenant_id", "render_job_id", "is_current"),
+        CheckConstraint("attempt_number >= 1", name="attempt_number_positive"),
+        CheckConstraint("size_bytes > 0", name="size_positive"),
+        CheckConstraint("duration_seconds > 0", name="duration_positive"),
+        CheckConstraint("width > 0 AND height > 0", name="dimensions_positive"),
+        CheckConstraint("frame_rate > 0", name="frame_rate_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    render_plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_plans.id", ondelete="RESTRICT"), nullable=False
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(700), nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    sidecar_storage_key: Mapped[str | None] = mapped_column(String(700), nullable=True)
+    sidecar_checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    format_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    video_codec: Mapped[str] = mapped_column(String(80), nullable=False)
+    audio_codec: Mapped[str] = mapped_column(String(80), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    frame_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    audio_channels: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_sample_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    probe_version: Mapped[str] = mapped_column(String(160), nullable=False)
+    probe_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    validation: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    renderer_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class RenderDefect(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "render_defects"
+    __table_args__ = (Index("ix_render_defects_tenant_job", "tenant_id", "render_job_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    render_output_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_outputs.id", ondelete="RESTRICT"), nullable=False
+    )
+    reported_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    meaning_or_boundary_changed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    requested_resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class RightsEvidence(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "rights_evidence"
+    __table_args__ = (
+        Index("ix_rights_tenant_asset_created", "tenant_id", "asset_id", "created_at"),
+        Index("ix_rights_tenant_render", "tenant_id", "render_job_id"),
+        CheckConstraint(
+            "expires_at IS NOT NULL OR no_expiration_asserted = true",
+            name="expiration_explicit",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > effective_from",
+            name="expiration_after_effective",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="RESTRICT"), nullable=False
+    )
+    candidate_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="RESTRICT"), nullable=True
+    )
+    render_job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_jobs.id", ondelete="RESTRICT"), nullable=True
+    )
+    recorded_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    revoked_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    scope: Mapped[RightsScope] = mapped_column(
+        Enum(RightsScope, name="rights_scope"), nullable=False
+    )
+    basis: Mapped[RightsBasis] = mapped_column(
+        Enum(RightsBasis, name="rights_basis"), nullable=False
+    )
+    status: Mapped[RightsEvidenceStatus] = mapped_column(
+        Enum(RightsEvidenceStatus, name="rights_evidence_status"), nullable=False
+    )
+    source_owner: Mapped[str] = mapped_column(String(300), nullable=False)
+    evidence_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    evidence_reference: Mapped[str] = mapped_column(String(500), nullable=False)
+    evidence_checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    permission_recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    no_expiration_asserted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allowed_platforms: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    allowed_territories: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    commercial_use_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    editing_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ai_processing_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    attribution_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    attribution_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    license_terms: Mapped[str] = mapped_column(Text, nullable=False)
+    restrictions: Mapped[str] = mapped_column(Text, nullable=False)
+    third_party_material: Mapped[dict[str, str]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    campaign_reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    evidence_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class QualityEvaluation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "quality_evaluations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "idempotency_key", name="uq_quality_evaluation_tenant_idempotency"
+        ),
+        Index("ix_quality_tenant_outcome_created", "tenant_id", "outcome", "created_at"),
+        Index("ix_quality_tenant_render_created", "tenant_id", "render_job_id", "created_at"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_output_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_outputs.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_plans.id", ondelete="RESTRICT"), nullable=False
+    )
+    candidate_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clip_candidates.id", ondelete="RESTRICT"), nullable=False
+    )
+    asset_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("assets.id", ondelete="RESTRICT"), nullable=False
+    )
+    rights_evidence_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("rights_evidence.id", ondelete="RESTRICT"), nullable=True
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    destination: Mapped[DestinationPlatform] = mapped_column(
+        Enum(DestinationPlatform, name="destination_platform"), nullable=False
+    )
+    territory: Mapped[str] = mapped_column(String(32), nullable=False)
+    campaign_reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    outcome: Mapped[GateOutcome] = mapped_column(
+        Enum(GateOutcome, name="gate_outcome"), nullable=False
+    )
+    automated_outcome: Mapped[GateOutcome] = mapped_column(
+        Enum(GateOutcome, name="gate_outcome"), nullable=False
+    )
+    evaluation_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_assistance_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    policy_explanation: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    missing_evidence: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    remediation: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    hard_block_reasons: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    approval_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    approval_signature: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approval_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class QualityCheckResult(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "quality_check_results"
+    __table_args__ = (
+        UniqueConstraint("evaluation_id", "kind", name="uq_quality_check_evaluation_kind"),
+        Index("ix_quality_check_tenant_evaluation", "tenant_id", "evaluation_id"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    evaluation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("quality_evaluations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[QualityCheckKind] = mapped_column(
+        Enum(QualityCheckKind, name="quality_check_kind"), nullable=False
+    )
+    status: Mapped[QualityCheckStatus] = mapped_column(
+        Enum(QualityCheckStatus, name="quality_check_status"), nullable=False
+    )
+    severity: Mapped[QualitySeverity] = mapped_column(
+        Enum(QualitySeverity, name="quality_severity"), nullable=False
+    )
+    evidence_source: Mapped[EvidenceSource] = mapped_column(
+        Enum(EvidenceSource, name="evidence_source"), nullable=False
+    )
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    check_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    remediation: Mapped[str] = mapped_column(Text, nullable=False)
+    hard_block: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class QualityReviewDecision(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "quality_review_decisions"
+    __table_args__ = (Index("ix_quality_decision_tenant_evaluation", "tenant_id", "evaluation_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    evaluation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("quality_evaluations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reviewer_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    action: Mapped[GateReviewAction] = mapped_column(
+        Enum(GateReviewAction, name="gate_review_action"), nullable=False
+    )
+    decision_source: Mapped[EvidenceSource] = mapped_column(
+        Enum(EvidenceSource, name="evidence_source"), nullable=False
+    )
+    from_outcome: Mapped[GateOutcome] = mapped_column(
+        Enum(GateOutcome, name="gate_outcome"), nullable=False
+    )
+    to_outcome: Mapped[GateOutcome] = mapped_column(
+        Enum(GateOutcome, name="gate_outcome"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    acknowledged_check_ids: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class GateVerification(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "gate_verifications"
+    __table_args__ = (
+        Index("ix_gate_verification_tenant_evaluation", "tenant_id", "evaluation_id"),
+        CheckConstraint("valid_until > verified_at", name="validity_order"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    evaluation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("quality_evaluations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    checkpoint: Mapped[GateCheckpoint] = mapped_column(
+        Enum(GateCheckpoint, name="gate_checkpoint"), nullable=False
+    )
+    accepted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    observed_input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    failure_reasons: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    evidence_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    evidence_signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PublishingOAuthState(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "publishing_oauth_states"
+    __table_args__ = (
+        UniqueConstraint("state_hash", name="uq_publishing_oauth_state_hash"),
+        Index("ix_publishing_oauth_tenant_user", "tenant_id", "user_id", "created_at"),
+        CheckConstraint("expires_at > created_at", name="publishing_oauth_expiry_order"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[PublishingProvider] = mapped_column(
+        Enum(PublishingProvider, name="publishing_provider"), nullable=False
+    )
+    state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    pkce_verifier_envelope: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(1000), nullable=False)
+    requested_scopes: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    denial_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class PublishingConnection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "publishing_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "provider_destination_id",
+            name="uq_publishing_connection_destination",
+        ),
+        Index("ix_publishing_connection_tenant_state", "tenant_id", "state"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    provider: Mapped[PublishingProvider] = mapped_column(
+        Enum(PublishingProvider, name="publishing_provider"), nullable=False
+    )
+    state: Mapped[OAuthConnectionState] = mapped_column(
+        Enum(OAuthConnectionState, name="oauth_connection_state"), nullable=False
+    )
+    provider_destination_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    destination_display_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    granted_scopes: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    token_envelope: Mapped[str] = mapped_column(Text, nullable=False)
+    access_token_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    has_refresh_token: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_validated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconnect_required_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class Publication(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "publications"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "provider", "idempotency_key", name="uq_publication_idempotency"
+        ),
+        UniqueConstraint("background_job_id", name="uq_publication_background_job"),
+        Index("ix_publications_tenant_state_created", "tenant_id", "state", "created_at"),
+        Index("ix_publications_provider_remote", "provider", "provider_publication_id"),
+        CheckConstraint("progress_percent >= 0 AND progress_percent <= 100", name="progress_range"),
+        CheckConstraint("committed_bytes >= 0", name="committed_bytes_nonnegative"),
+        CheckConstraint("content_length > 0", name="content_length_positive"),
+        CheckConstraint("attempt_count >= 0", name="attempt_count_nonnegative"),
+        CheckConstraint("max_attempts >= 1", name="max_attempts_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    connection_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("publishing_connections.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    render_job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_output_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("render_outputs.id", ondelete="RESTRICT"), nullable=False
+    )
+    quality_evaluation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("quality_evaluations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    background_job_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="RESTRICT"), nullable=False
+    )
+    public_approval_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("approval_requests.id", ondelete="RESTRICT"), nullable=True
+    )
+    acceptance_gate_verification_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("gate_verifications.id", ondelete="RESTRICT"), nullable=False
+    )
+    upload_gate_verification_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("gate_verifications.id", ondelete="RESTRICT"), nullable=True
+    )
+    provider: Mapped[PublishingProvider] = mapped_column(
+        Enum(PublishingProvider, name="publishing_provider"), nullable=False
+    )
+    provider_destination_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[PublishState] = mapped_column(
+        Enum(PublishState, name="publish_state"), default=PublishState.QUEUED, nullable=False
+    )
+    visibility: Mapped[PublishVisibility] = mapped_column(
+        Enum(PublishVisibility, name="publish_visibility"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    made_for_kids: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    category_id: Mapped[str] = mapped_column(String(10), default="22", nullable=False)
+    territory: Mapped[str] = mapped_column(String(32), nullable=False)
+    campaign_reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    stage: Mapped[str] = mapped_column(String(80), default="queued", nullable=False)
+    content_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    content_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    committed_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    upload_session_envelope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_publication_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    provider_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    provider_processing_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    sanitized_provider_response: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    analytics_handoff: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    uncertain_remote_result: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    manual_next_step: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    retry_after_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    upload_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    provider_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class PublicationEvent(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "publication_events"
+    __table_args__ = (
+        UniqueConstraint("publication_id", "sequence", name="uq_publication_event_sequence"),
+        Index("ix_publication_events_tenant_publication", "tenant_id", "publication_id"),
+        CheckConstraint("sequence >= 1", name="sequence_positive"),
+        CheckConstraint("progress_percent >= 0 AND progress_percent <= 100", name="progress_range"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    publication_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("publications.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[PublishEventKind] = mapped_column(
+        Enum(PublishEventKind, name="publish_event_kind"), nullable=False
+    )
+    from_state: Mapped[PublishState | None] = mapped_column(
+        Enum(PublishState, name="publish_state"), nullable=True
+    )
+    to_state: Mapped[PublishState] = mapped_column(
+        Enum(PublishState, name="publish_state"), nullable=False
+    )
+    progress_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage: Mapped[str] = mapped_column(String(80), nullable=False)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    event_data: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class UsageCostEvent(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "usage_cost_events"
+    __table_args__ = (Index("ix_usage_tenant_created", "tenant_id", "created_at"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    operation: Mapped[str] = mapped_column(String(100), nullable=False)
+    input_units: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_units: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost: Mapped[Decimal] = mapped_column(
+        Numeric(precision=18, scale=8), default=Decimal("0"), nullable=False
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class FeatureFlag(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "feature_flags"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_feature_tenant_name"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+
+
+class ProviderStatus(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "provider_statuses"
+    __table_args__ = (UniqueConstraint("provider", "capability", name="uq_provider_capability"),)
+
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    capability: Mapped[str] = mapped_column(String(100), nullable=False)
+    mode: Mapped[ProviderMode] = mapped_column(
+        Enum(ProviderMode, name="provider_mode"), nullable=False
+    )
+    required_variable_names: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, default=list, nullable=False
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class SystemControl(Base):
+    __tablename__ = "system_control"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True, default="global")
+    paused: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), default="safe default", nullable=False)
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )

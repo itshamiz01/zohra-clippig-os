@@ -1,0 +1,3 @@
+Single-head Alembic migrations for Zohra ClipOS.
+
+Never edit an applied migration. Create additive revisions and test the full chain against an isolated PostgreSQL database before staging or production.

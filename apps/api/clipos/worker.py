@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import asyncio
+import signal
+
+from clipos.config import get_settings
+from clipos.database import Base, build_engine, build_session_factory
+from clipos.gateways.publishing import build_publishing_adapters
+from clipos.gateways.transcription import build_transcription_gateway
+from clipos.media.tooling import MediaTooling
+from clipos.queue import RedisQueueBroker
+from clipos.services.asset_processing import AssetProcessingService
+from clipos.services.publish_processing import PublishProcessor
+from clipos.services.rendering import RenderProcessor
+from clipos.services.workers import ClipOSWorker
+from clipos.storage import LocalObjectStorage
+
+
+async def run_worker() -> None:
+    settings = get_settings()
+    if settings.queue_backend == "memory":
+        raise RuntimeError(
+            "a standalone worker cannot share an in-memory queue; enable the embedded "
+            "development worker or configure Redis"
+        )
+    engine = build_engine(settings)
+    factory = build_session_factory(engine)
+    if settings.auto_create_schema:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+    storage = LocalObjectStorage(settings.storage_local_root)
+    queue = RedisQueueBroker(settings.redis_url.get_secret_value())
+    transcription = build_transcription_gateway(settings)
+    publishing_adapters = build_publishing_adapters(settings)
+    media_tools = MediaTooling(settings)
+    await media_tools.check()
+    asset_processor = AssetProcessingService(
+        session_factory=factory,
+        storage=storage,
+        media_tools=media_tools,
+        transcription=transcription,
+        settings=settings,
+    )
+    render_processor = RenderProcessor(
+        session_factory=factory,
+        storage=storage,
+        media_tools=media_tools,
+        settings=settings,
+    )
+    publish_processor = PublishProcessor(
+        session_factory=factory,
+        storage=storage,
+        registry=publishing_adapters,
+        settings=settings,
+    )
+    worker = ClipOSWorker(
+        asset_processor=asset_processor,
+        render_processor=render_processor,
+        publish_processor=publish_processor,
+        session_factory=factory,
+        queue=queue,
+        settings=settings,
+    )
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signum, worker.stop)
+    try:
+        await worker.run()
+    finally:
+        await transcription.close()
+        await publishing_adapters.close()
+        await queue.close()
+        await engine.dispose()
+
+
+def main() -> None:
+    asyncio.run(run_worker())
+
+
+if __name__ == "__main__":
+    main()

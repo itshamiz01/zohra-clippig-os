@@ -1,0 +1,47 @@
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+!.env.compose.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+*.egg-info/
+.coverage
+htmlcov/
+coverage*.json
+coverage*.xml
+
+# Node
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Runtime data
+data/*
+!data/.gitkeep
+!data/storage/
+data/storage/*
+!data/storage/.gitkeep
+*.db
+*.sqlite3
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Generated media and logs
+*.log
+tmp/
+renders/
+uploads/

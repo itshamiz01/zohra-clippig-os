@@ -1,0 +1,161 @@
+name: zohra-clipos-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: clipos_dev
+      POSTGRES_USER: clipos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in an uncommitted .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - clipos_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipos -d clipos_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - clipos_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      CLIPOS_ENVIRONMENT: staging
+      CLIPOS_SECRET_KEY: ${CLIPOS_SECRET_KEY:?Set CLIPOS_SECRET_KEY in an uncommitted .env}
+      CLIPOS_DATABASE_URL: postgresql+asyncpg://clipos:${POSTGRES_PASSWORD}@postgres:5432/clipos_dev
+      CLIPOS_AUTO_CREATE_SCHEMA: "false"
+      CLIPOS_QUEUE_BACKEND: redis
+      CLIPOS_REDIS_URL: redis://redis:6379/0
+      CLIPOS_REDIS_REQUIRED: "true"
+      CLIPOS_STORAGE_BACKEND: local
+      CLIPOS_STORAGE_LOCAL_ROOT: /app/data/storage
+      CLIPOS_CORS_ORIGINS: '["http://localhost:3000"]'
+      CLIPOS_TRUSTED_HOSTS: '["localhost","127.0.0.1","api","*.e2b.app"]'
+      CLIPOS_MODEL_PROVIDER: disabled
+      CLIPOS_TRANSCRIPTION_PROVIDER: disabled
+      CLIPOS_EMBEDDED_WORKER_ENABLED: "false"
+      CLIPOS_MAX_UPLOAD_BYTES: "2147483648"
+      CLIPOS_RENDERING_ENABLED: "true"
+      CLIPOS_RENDER_TEMP_ROOT: /app/data/render-tmp
+      CLIPOS_RENDER_MAX_DURATION_SECONDS: "180"
+      CLIPOS_RENDER_TIMEOUT_SECONDS: "900"
+      CLIPOS_RENDER_MAX_OUTPUT_BYTES: "1073741824"
+      CLIPOS_RENDER_MIN_FREE_DISK_BYTES: "536870912"
+      CLIPOS_RENDER_MAX_ACTIVE_PER_TENANT: "2"
+      CLIPOS_RENDER_MAX_QUEUED_PER_TENANT: "20"
+      CLIPOS_RENDER_MAX_ATTEMPTS: "3"
+      # Phase 6 is opt-in. These values are fail-closed and are not live-provider proof.
+      CLIPOS_YOUTUBE_PUBLISHING_ENABLED: ${CLIPOS_YOUTUBE_PUBLISHING_ENABLED:-false}
+      CLIPOS_PUBLISHING_PUBLIC_ENABLED: ${CLIPOS_PUBLISHING_PUBLIC_ENABLED:-false}
+      CLIPOS_PUBLISHING_TOKEN_ENCRYPTION_KEY: ${CLIPOS_PUBLISHING_TOKEN_ENCRYPTION_KEY:-}
+      CLIPOS_PUBLISHING_UPLOAD_CHUNK_BYTES: ${CLIPOS_PUBLISHING_UPLOAD_CHUNK_BYTES:-8388608}
+      CLIPOS_PUBLISHING_MAX_ACTIVE_PER_TENANT: ${CLIPOS_PUBLISHING_MAX_ACTIVE_PER_TENANT:-2}
+      CLIPOS_PUBLISHING_MAX_QUEUED_PER_TENANT: ${CLIPOS_PUBLISHING_MAX_QUEUED_PER_TENANT:-20}
+      CLIPOS_PUBLISHING_MAX_ATTEMPTS: ${CLIPOS_PUBLISHING_MAX_ATTEMPTS:-3}
+      CLIPOS_PUBLISHING_DAILY_UPLOAD_LIMIT: ${CLIPOS_PUBLISHING_DAILY_UPLOAD_LIMIT:-20}
+      CLIPOS_YOUTUBE_CLIENT_ID: ${CLIPOS_YOUTUBE_CLIENT_ID:-}
+      CLIPOS_YOUTUBE_CLIENT_SECRET: ${CLIPOS_YOUTUBE_CLIENT_SECRET:-}
+      CLIPOS_YOUTUBE_REDIRECT_URI: ${CLIPOS_YOUTUBE_REDIRECT_URI:-https://localhost/api/v1/publishing/oauth/youtube/callback}
+    volumes:
+      - clipos_storage:/app/data/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "clipos.worker"]
+    environment:
+      CLIPOS_ENVIRONMENT: staging
+      CLIPOS_SECRET_KEY: ${CLIPOS_SECRET_KEY:?Set CLIPOS_SECRET_KEY in an uncommitted .env}
+      CLIPOS_DATABASE_URL: postgresql+asyncpg://clipos:${POSTGRES_PASSWORD}@postgres:5432/clipos_dev
+      CLIPOS_AUTO_CREATE_SCHEMA: "false"
+      CLIPOS_QUEUE_BACKEND: redis
+      CLIPOS_REDIS_URL: redis://redis:6379/0
+      CLIPOS_REDIS_REQUIRED: "true"
+      CLIPOS_STORAGE_BACKEND: local
+      CLIPOS_STORAGE_LOCAL_ROOT: /app/data/storage
+      CLIPOS_MODEL_PROVIDER: disabled
+      CLIPOS_TRANSCRIPTION_PROVIDER: disabled
+      CLIPOS_EMBEDDED_WORKER_ENABLED: "false"
+      CLIPOS_RENDERING_ENABLED: "true"
+      CLIPOS_RENDER_TEMP_ROOT: /app/data/render-tmp
+      CLIPOS_RENDER_MAX_DURATION_SECONDS: "180"
+      CLIPOS_RENDER_TIMEOUT_SECONDS: "900"
+      CLIPOS_RENDER_MAX_OUTPUT_BYTES: "1073741824"
+      CLIPOS_RENDER_MIN_FREE_DISK_BYTES: "536870912"
+      CLIPOS_RENDER_MAX_ACTIVE_PER_TENANT: "2"
+      CLIPOS_RENDER_MAX_QUEUED_PER_TENANT: "20"
+      CLIPOS_RENDER_MAX_ATTEMPTS: "3"
+      # Worker must receive exactly the same publishing/OAuth configuration as the API.
+      CLIPOS_YOUTUBE_PUBLISHING_ENABLED: ${CLIPOS_YOUTUBE_PUBLISHING_ENABLED:-false}
+      CLIPOS_PUBLISHING_PUBLIC_ENABLED: ${CLIPOS_PUBLISHING_PUBLIC_ENABLED:-false}
+      CLIPOS_PUBLISHING_TOKEN_ENCRYPTION_KEY: ${CLIPOS_PUBLISHING_TOKEN_ENCRYPTION_KEY:-}
+      CLIPOS_PUBLISHING_UPLOAD_CHUNK_BYTES: ${CLIPOS_PUBLISHING_UPLOAD_CHUNK_BYTES:-8388608}
+      CLIPOS_PUBLISHING_MAX_ACTIVE_PER_TENANT: ${CLIPOS_PUBLISHING_MAX_ACTIVE_PER_TENANT:-2}
+      CLIPOS_PUBLISHING_MAX_QUEUED_PER_TENANT: ${CLIPOS_PUBLISHING_MAX_QUEUED_PER_TENANT:-20}
+      CLIPOS_PUBLISHING_MAX_ATTEMPTS: ${CLIPOS_PUBLISHING_MAX_ATTEMPTS:-3}
+      CLIPOS_PUBLISHING_DAILY_UPLOAD_LIMIT: ${CLIPOS_PUBLISHING_DAILY_UPLOAD_LIMIT:-20}
+      CLIPOS_YOUTUBE_CLIENT_ID: ${CLIPOS_YOUTUBE_CLIENT_ID:-}
+      CLIPOS_YOUTUBE_CLIENT_SECRET: ${CLIPOS_YOUTUBE_CLIENT_SECRET:-}
+      CLIPOS_YOUTUBE_REDIRECT_URI: ${CLIPOS_YOUTUBE_REDIRECT_URI:-https://localhost/api/v1/publishing/oauth/youtube/callback}
+    volumes:
+      - clipos_storage:/app/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    pids_limit: 256
+    mem_limit: 3g
+    cpus: 2.0
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      CLIPOS_API_INTERNAL_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  clipos_postgres:
+  clipos_redis:
+  clipos_storage:
