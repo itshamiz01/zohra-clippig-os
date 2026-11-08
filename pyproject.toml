@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zohra-clipos"
-version = "0.7.0"
+version = "0.8.0"
 description = "Safety-first control plane for AI-assisted short-form media operations"
 readme = "README.md"
 requires-python = ">=3.11"

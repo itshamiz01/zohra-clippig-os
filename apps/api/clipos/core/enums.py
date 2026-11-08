@@ -369,3 +369,42 @@ class RecommendationState(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     APPLIED = "applied"
+
+
+class OpportunitySourceKind(StrEnum):
+    SEED_LIST = "seed_list"
+    RSS_FEED = "rss_feed"
+    PUBLIC_SITE = "public_site"
+    SEARCH_PROVIDER = "search_provider"
+
+
+class OpportunitySourceStatus(StrEnum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
+class OpportunitySyncState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    PARTIALLY_SUCCEEDED = "partially_succeeded"
+    FAILED = "failed"
+
+
+class OpportunityState(StrEnum):
+    NEW = "new"
+    REVIEWING = "reviewing"
+    SHORTLISTED = "shortlisted"
+    REJECTED = "rejected"
+    SUPPRESSED = "suppressed"
+
+
+class SuppressionMatchType(StrEnum):
+    CREATOR_HANDLE = "creator_handle"
+    DOMAIN = "domain"
+    KEYWORD = "keyword"
+
+
+class OpportunityHandoffState(StrEnum):
+    DRAFT = "draft"
+    READY = "ready"

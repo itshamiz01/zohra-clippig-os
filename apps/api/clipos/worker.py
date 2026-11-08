@@ -6,12 +6,14 @@ import signal
 from clipos.config import get_settings
 from clipos.database import Base, build_engine, build_session_factory
 from clipos.gateways.analytics import build_analytics_adapters
+from clipos.gateways.opportunities import build_opportunity_adapters
 from clipos.gateways.publishing import build_publishing_adapters
 from clipos.gateways.transcription import build_transcription_gateway
 from clipos.media.tooling import MediaTooling
 from clipos.queue import RedisQueueBroker
 from clipos.services.analytics_processing import AnalyticsProcessor
 from clipos.services.asset_processing import AssetProcessingService
+from clipos.services.opportunity_processing import OpportunityProcessor
 from clipos.services.publish_processing import PublishProcessor
 from clipos.services.rendering import RenderProcessor
 from clipos.services.workers import ClipOSWorker
@@ -35,6 +37,7 @@ async def run_worker() -> None:
     transcription = build_transcription_gateway(settings)
     publishing_adapters = build_publishing_adapters(settings)
     analytics_adapters = build_analytics_adapters(settings)
+    opportunity_adapters = build_opportunity_adapters(settings)
     media_tools = MediaTooling(settings)
     await media_tools.check()
     asset_processor = AssetProcessingService(
@@ -61,11 +64,17 @@ async def run_worker() -> None:
         registry=analytics_adapters,
         settings=settings,
     )
+    opportunity_processor = OpportunityProcessor(
+        session_factory=factory,
+        registry=opportunity_adapters,
+        settings=settings,
+    )
     worker = ClipOSWorker(
         asset_processor=asset_processor,
         render_processor=render_processor,
         publish_processor=publish_processor,
         analytics_processor=analytics_processor,
+        opportunity_processor=opportunity_processor,
         session_factory=factory,
         queue=queue,
         settings=settings,
@@ -79,6 +88,7 @@ async def run_worker() -> None:
         await transcription.close()
         await publishing_adapters.close()
         await analytics_adapters.close()
+        await opportunity_adapters.close()
         await queue.close()
         await engine.dispose()
 

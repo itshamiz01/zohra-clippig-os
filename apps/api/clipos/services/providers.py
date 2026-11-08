@@ -180,6 +180,34 @@ class ProviderStatusService:
                 else ProviderMode.DISABLED,
                 ["CLIPOS_ANALYTICS_PROVIDER"],
             ),
+            (
+                "seed_list",
+                "opportunity_discovery",
+                ProviderMode.REAL_TESTED,
+                [],
+            ),
+            (
+                "rss_feed",
+                "opportunity_discovery",
+                ProviderMode.UNVERIFIED
+                if settings.opportunity_rss_enabled
+                else ProviderMode.DISABLED,
+                ["CLIPOS_OPPORTUNITY_RSS_ENABLED"],
+            ),
+            (
+                "public_site",
+                "opportunity_discovery",
+                ProviderMode.DISABLED,
+                [],
+            ),
+            (
+                "search_provider",
+                "opportunity_discovery",
+                ProviderMode.MOCKED
+                if settings.opportunity_provider == "fake"
+                else ProviderMode.DISABLED,
+                ["CLIPOS_OPPORTUNITY_PROVIDER"],
+            ),
         ]
         for provider, capability, mode, variable_names in definitions:
             existing = await session.scalar(
