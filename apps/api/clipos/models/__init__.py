@@ -1,4 +1,6 @@
 from clipos.models.entities import (
+    AnalyticsCollectionRun,
+    AnalyticsMetricSnapshot,
     ApprovalRequest,
     Asset,
     AuditEvent,
@@ -8,6 +10,8 @@ from clipos.models.entities import (
     CandidateTopic,
     ClipCandidate,
     DiscoveryRun,
+    Experiment,
+    ExperimentVariant,
     FeatureFlag,
     GateVerification,
     MediaMetadata,
@@ -19,6 +23,7 @@ from clipos.models.entities import (
     QualityCheckResult,
     QualityEvaluation,
     QualityReviewDecision,
+    Recommendation,
     RenderCaptionSegment,
     RenderDefect,
     RenderJob,
@@ -38,6 +43,8 @@ from clipos.models.entities import (
 )
 
 __all__ = [
+    "AnalyticsCollectionRun",
+    "AnalyticsMetricSnapshot",
     "ApprovalRequest",
     "Asset",
     "AuditEvent",
@@ -47,6 +54,8 @@ __all__ = [
     "CandidateTopic",
     "ClipCandidate",
     "DiscoveryRun",
+    "Experiment",
+    "ExperimentVariant",
     "FeatureFlag",
     "GateVerification",
     "MediaMetadata",
@@ -58,6 +67,7 @@ __all__ = [
     "QualityCheckResult",
     "QualityEvaluation",
     "QualityReviewDecision",
+    "Recommendation",
     "RenderCaptionSegment",
     "RenderDefect",
     "RenderJob",

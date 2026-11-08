@@ -638,7 +638,7 @@ class PublishProcessor:
             "publication_id": str(publication.id),
             "visibility": publication.visibility.value,
             "published_at": datetime.now(UTC).isoformat(),
-            "phase_7_status": "not_implemented",
+            "phase_7_status": "implemented",
         }
         publication.failure_category = None
         publication.failure_message = None

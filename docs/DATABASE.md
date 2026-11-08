@@ -22,10 +22,12 @@ b71f2e44e1fe  Phase 3 explainable clip discovery
     ↓
 43b5bc652f2e  Phase 5 mandatory quality and rights gates
     ↓
-d4a9a9290b9a  Phase 6 gated YouTube publishing (head)
+d4a9a9290b9a  Phase 6 gated YouTube publishing
+    ↓
+c7d40e02a0b4  Phase 7 analytics, experiments and learning (head)
 ```
 
-All revisions are additive. Phase 6 does not rewrite an accepted historical migration.
+All revisions are additive. Phase 7 does not rewrite an accepted historical migration.
 
 ## Phase 4 tables
 
@@ -262,9 +264,52 @@ publish_state, publish_event_kind
 
 The Phase 6 migration creates and tears down these PostgreSQL types after/before their dependent tables as appropriate. SQLite uses portable enum values; provider metadata and event evidence use JSON/JSONB.
 
+## Phase 7 tables
+
+### `analytics_collection_runs`
+
+One tenant-scoped collection pass:
+
+- tenant, requesting user (nullable for system triggers) and optional durable background job (unique);
+- optional provider filter, lifecycle state and the serving adapter's truthful `provider_mode`;
+- publications considered, snapshots written, metrics reported/unavailable counts (check-constrained non-negative);
+- sanitized failure category/message and start/finish timestamps.
+
+### `analytics_metric_snapshots`
+
+One provider metric outcome for one publication and day-grained window:
+
+- tenant, publication (cascade), optional collection run (set null), provider and provider publication ID;
+- metric name, unit, metric definition version, source label and fetch timestamp;
+- `availability` (`reported`, `missing`, `unavailable`, `permission_denied`, `stale`) with a nullable float value;
+- a check constraint enforces that value is present exactly when availability is `reported` or `stale` — an unreported metric can never carry an invented zero;
+- `UNIQUE (publication_id, metric, window_start, window_end, source)` is the collection dedup key; re-collection refreshes the row in place.
+
+### `experiments` and `experiment_variants`
+
+Tenant-scoped experiment records: hypothesis, lifecycle state, eligibility and success-criteria JSON, canonical success metric, optional start/end and notes. Variants belong to an experiment (cascade), are unique by name within it, and must link to a clip candidate or a publication (check constraint); their `config` JSON records what the variant changes.
+
+### `recommendations`
+
+Bounded learning-loop output:
+
+- tenant, kind (`hook`, `duration`, `captions`, `posting_time`, `format`) and state (`proposed`, `approved`, `rejected`, `applied`);
+- title, rationale and the evidence JSON the recommendation was derived from (group statistics, publication IDs, fingerprint);
+- algorithm version and a system `created_by` identity — recommendations are never user-authored;
+- reviewer user/timestamp/note for the human decision. No service path sets `applied` in Phase 7.
+
+## Phase 7 native enums
+
+```text
+analytics_collection_state, metric_availability, experiment_state,
+recommendation_kind, recommendation_state
+```
+
+The Phase 7 migration creates exactly these five types on PostgreSQL and drops them on downgrade; `publishing_provider` and `provider_mode` are referenced from earlier migrations without recreation.
+
 ## Tenant isolation
 
-Every Phase 2–6 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication and publication-event queries. Storage is also tenant-prefixed.
+Every Phase 2–7 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant and recommendation queries. Storage is also tenant-prefixed.
 
 The schema uses ordinary foreign keys plus service-level tenant predicates rather than PostgreSQL row-level security. Live PostgreSQL RLS was not claimed.
 
@@ -293,11 +338,11 @@ export PYTHONPATH=apps/api
 # Verify ORM/migration agreement
 .venv/bin/alembic check
 
-# Roll back Phase 6 only
-.venv/bin/alembic downgrade 43b5bc652f2e
+# Roll back Phase 7 only
+.venv/bin/alembic downgrade d4a9a9290b9a
 
-# Restore Phase 6
-.venv/bin/alembic upgrade d4a9a9290b9a
+# Restore Phase 7
+.venv/bin/alembic upgrade c7d40e02a0b4
 ```
 
 Offline PostgreSQL contracts:
