@@ -53,6 +53,13 @@ class SourcedOpportunity:
     sample_item_count: int = 0
     recent_views_band: str | None = None
     third_party_compilation: bool = False
+    # v2.1 content-debt intake: recorded library facts. Adapters emit
+    # them only when the source record actually carries them; the
+    # content-debt score treats every absence as an unscored factor.
+    library_episode_count: int | None = None
+    library_long_form_hours: float | None = None
+    existing_shorts_count: int | None = None
+    moments_per_episode: int | None = None
     field_provenance: dict[str, FieldProvenance] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 

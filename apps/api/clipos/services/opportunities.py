@@ -43,6 +43,12 @@ from clipos.models import (
     OpportunitySyncRun,
 )
 from clipos.models.entities import utcnow
+from clipos.opportunities.content_debt import (
+    DEFAULT_MOMENTS_PER_EPISODE,
+    ContentDebt,
+    ContentDebtSignals,
+    score_content_debt,
+)
 from clipos.opportunities.scoring import SCORE_VERSION, OpportunitySignals, score_opportunity
 from clipos.services.audit import AuditService
 from clipos.services.jobs import JobService
@@ -500,6 +506,10 @@ class OpportunityService:
             language=record.language,
             audience_band=record.audience_band,
             posting_cadence=record.posting_cadence,
+            library_episode_count=record.library_episode_count,
+            library_long_form_hours=record.library_long_form_hours,
+            existing_shorts_count=record.existing_shorts_count,
+            moments_per_episode_assumption=record.moments_per_episode,
             dedup_key=dedup_key,
             possible_duplicate_of_id=fuzzy.id if fuzzy is not None else None,
             state=OpportunityState.NEW,
@@ -637,6 +647,7 @@ class OpportunityService:
                 desc(Opportunity.overall_score),
                 desc(Opportunity.created_at),
             )
+        statement = statement.options(selectinload(Opportunity.score_components))
         return list((await session.scalars(statement.limit(min(limit, 200)))).all())
 
     @staticmethod
@@ -1000,6 +1011,10 @@ def _evidence_for(record: SourcedOpportunity) -> dict[str, Any]:
             "sample_item_count": record.sample_item_count,
             "recent_views_band": record.recent_views_band,
             "third_party_compilation": record.third_party_compilation,
+            "library_episode_count": record.library_episode_count,
+            "library_long_form_hours": record.library_long_form_hours,
+            "existing_shorts_count": record.existing_shorts_count,
+            "moments_per_episode": record.moments_per_episode,
         },
         "source_record": record.raw,
     }
@@ -1037,6 +1052,14 @@ def _apply_record(
         opportunity.audience_band = record.audience_band
     if record.posting_cadence is not None:
         opportunity.posting_cadence = record.posting_cadence
+    if record.library_episode_count is not None:
+        opportunity.library_episode_count = record.library_episode_count
+    if record.library_long_form_hours is not None:
+        opportunity.library_long_form_hours = record.library_long_form_hours
+    if record.existing_shorts_count is not None:
+        opportunity.existing_shorts_count = record.existing_shorts_count
+    if record.moments_per_episode is not None:
+        opportunity.moments_per_episode_assumption = record.moments_per_episode
     opportunity.dedup_key = dedup_key
     opportunity.evidence = _evidence_for(record)
 
@@ -1055,6 +1078,36 @@ def _signals_for_row(opportunity: Opportunity) -> OpportunitySignals:
         recent_views_band=signals.get("recent_views_band"),
         third_party_compilation=bool(signals.get("third_party_compilation", False)),
     )
+
+
+def content_debt_for_row(opportunity: Opportunity) -> ContentDebt:
+    """Compute the v2.1 content-debt score for one stored opportunity.
+
+    Deterministic and read-only: the score is derived entirely from the
+    recorded intake columns and the persisted commercial score
+    components, so it can be recomputed on every read and always
+    reflects the newest recorded facts. The opportunity's
+    ``score_components`` relationship must be loaded by the caller.
+    """
+    commercial: dict[str, float | None] = {
+        component.key: component.score
+        for component in opportunity.score_components
+        if component.key in {"audience_fit", "performance_fit"}
+    }
+    signals = ContentDebtSignals(
+        library_episode_count=opportunity.library_episode_count,
+        library_long_form_hours=opportunity.library_long_form_hours,
+        existing_shorts_count=opportunity.existing_shorts_count,
+        moments_per_episode=(
+            opportunity.moments_per_episode_assumption or DEFAULT_MOMENTS_PER_EPISODE
+        ),
+        audience_band=opportunity.audience_band,
+        posting_cadence=opportunity.posting_cadence,
+        contact_route_label=opportunity.contact_route_label,
+        niche=opportunity.niche,
+        commercial_component_scores=commercial,
+    )
+    return score_content_debt(signals)
 
 
 def _similarity_text(value: str) -> str:

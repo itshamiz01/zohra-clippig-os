@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -6,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clipos.api.deps import get_principal, get_session, require_role
 from clipos.core.enums import OpportunityState, Role
 from clipos.core.security import Principal
+from clipos.models import Opportunity
 from clipos.opportunity_schemas import (
+    ContentDebtResponse,
     HandoffResponse,
     HandoffTransition,
     OpportunityCapabilityResponse,
@@ -26,9 +29,17 @@ from clipos.opportunity_schemas import (
     SyncRunResponse,
 )
 from clipos.queue import QueueMessage
-from clipos.services.opportunities import OpportunityService, opportunity_capabilities
+from clipos.services.opportunities import (
+    OpportunityService,
+    content_debt_for_row,
+    opportunity_capabilities,
+)
 
 router = APIRouter(prefix="/opportunities", tags=["opportunities"])
+
+
+def _content_debt(item: Opportunity) -> ContentDebtResponse:
+    return ContentDebtResponse.model_validate(asdict(content_debt_for_row(item)))
 
 
 @router.get("/capabilities", response_model=list[OpportunityCapabilityResponse])
@@ -258,10 +269,12 @@ async def list_opportunities(
         sort=sort,
         limit=limit,
     )
-    return OpportunityList(
-        items=[OpportunityResponse.model_validate(item) for item in opportunities],
-        total=len(opportunities),
-    )
+    items = []
+    for item in opportunities:
+        response = OpportunityResponse.model_validate(item)
+        response.content_debt = _content_debt(item)
+        items.append(response)
+    return OpportunityList(items=items, total=len(items))
 
 
 @router.get("/{opportunity_id}", response_model=OpportunityDetailResponse)
@@ -273,7 +286,9 @@ async def get_opportunity(
     opportunity = await OpportunityService.get_opportunity(
         session, principal.tenant_id, opportunity_id
     )
-    return OpportunityDetailResponse.model_validate(opportunity)
+    response = OpportunityDetailResponse.model_validate(opportunity)
+    response.content_debt = _content_debt(opportunity)
+    return response
 
 
 @router.post("/{opportunity_id}/transitions", response_model=OpportunityResponse)

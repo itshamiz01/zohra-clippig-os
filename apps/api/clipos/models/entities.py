@@ -36,6 +36,10 @@ from clipos.core.enums import (
     AssetState,
     AuditOutcome,
     AutonomyClass,
+    CampaignAssessmentState,
+    CampaignRightsBasis,
+    CampaignSourceKind,
+    CampaignStatus,
     CandidateReviewAction,
     CandidateState,
     CrmStage,
@@ -1834,6 +1838,14 @@ class Opportunity(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_version: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    # v2.1 content-debt intake. Recorded library facts an operator or
+    # source asserted at import time; all nullable because most sources
+    # cannot provide them, and the content-debt score treats every
+    # absence as an unscored factor rather than an estimate.
+    library_episode_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    library_long_form_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    existing_shorts_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    moments_per_episode_assumption: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     source: Mapped[OpportunitySource] = relationship(back_populates="opportunities")
     score_components: Mapped[list[OpportunityScoreComponent]] = relationship(
@@ -2195,6 +2207,7 @@ class RevenueRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_revenue_records_tenant_account", "tenant_id", "account_id"),
         Index("ix_revenue_records_tenant_kind_status", "tenant_id", "kind", "status"),
+        Index("ix_revenue_records_tenant_campaign", "tenant_id", "campaign_id"),
         CheckConstraint("amount_minor_units >= 0", name="amount_nonnegative"),
     )
 
@@ -2215,6 +2228,11 @@ class RevenueRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     external_reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # v2.1: set only on ``campaign_payout`` records, linking collected
+    # campaign money back to the campaign it was collected for.
+    campaign_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True
+    )
     created_by_user_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -2562,3 +2580,199 @@ class ExecutiveProposal(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class Campaign(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One third-party clipping campaign a tenant may produce for (v2.1).
+
+    Campaigns enter only from an operator: a single manual record or an
+    owner-supplied seed import. ``source_reference`` keeps the
+    provenance of the listing (a URL or label the owner supplied) in
+    Phase 8's source-record style — no external campaign source is
+    connected and nothing scrapes one. Money is integer minor units
+    with an ISO currency; ``cpm_rate_minor`` is the recorded rate per
+    thousand views, never a value ClipOS estimates or invents.
+    """
+
+    __tablename__ = "campaigns"
+    __table_args__ = (
+        Index("ix_campaigns_tenant_status", "tenant_id", "status"),
+        Index("ix_campaigns_tenant_platform", "tenant_id", "platform"),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_campaign_tenant_idempotency_key"),
+        CheckConstraint("cpm_rate_minor IS NULL OR cpm_rate_minor >= 0", name="cpm_nonnegative"),
+        CheckConstraint(
+            "max_payout_minor IS NULL OR max_payout_minor >= 0", name="max_payout_nonnegative"
+        ),
+        CheckConstraint("budget_minor IS NULL OR budget_minor >= 0", name="budget_nonnegative"),
+        CheckConstraint(
+            "minimum_views IS NULL OR minimum_views >= 0", name="minimum_views_nonnegative"
+        ),
+        CheckConstraint(
+            "expected_views IS NULL OR expected_views >= 0", name="expected_views_nonnegative"
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    platform: Mapped[str] = mapped_column(String(80), nullable=False)
+    sponsor_label: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source_kind: Mapped[CampaignSourceKind] = mapped_column(
+        Enum(CampaignSourceKind, name="campaign_source_kind"),
+        default=CampaignSourceKind.MANUAL,
+        nullable=False,
+    )
+    source_reference: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    cpm_rate_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    max_payout_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    budget_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    minimum_views: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    content_restrictions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    account_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rights_basis: Mapped[CampaignRightsBasis] = mapped_column(
+        Enum(CampaignRightsBasis, name="campaign_rights_basis"),
+        default=CampaignRightsBasis.UNKNOWN,
+        nullable=False,
+    )
+    submission_process: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[CampaignStatus] = mapped_column(
+        Enum(CampaignStatus, name="campaign_status"),
+        default=CampaignStatus.CANDIDATE,
+        nullable=False,
+    )
+    expected_views: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional CRM link: campaign payouts are recorded as Phase 9
+    # revenue records, which belong to an account, so a payout needs
+    # this link or an account named at payout time.
+    crm_account_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    qualification_override_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    requirements: Mapped[list[CampaignRequirement]] = relationship(
+        back_populates="campaign", cascade="all, delete-orphan"
+    )
+    assessments: Mapped[list[CampaignAssessment]] = relationship(
+        back_populates="campaign", cascade="all, delete-orphan"
+    )
+    publication_links: Mapped[list[CampaignPublication]] = relationship(
+        back_populates="campaign", cascade="all, delete-orphan"
+    )
+
+
+class CampaignRequirement(UUIDPrimaryKeyMixin, Base):
+    """One recorded requirement of a campaign (a minimum, a restriction,
+    an account condition). ``kind`` is an operator-supplied label such
+    as ``minimum_views`` or ``account_age_days``; the requirement is
+    evidence for a human decision, never an automated check against a
+    platform."""
+
+    __tablename__ = "campaign_requirements"
+    __table_args__ = (Index("ix_campaign_requirements_campaign", "campaign_id"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    campaign_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    campaign: Mapped[Campaign] = relationship(back_populates="requirements")
+
+
+class CampaignAssessment(UUIDPrimaryKeyMixin, Base):
+    """One immutable profitability assessment of a campaign.
+
+    Assessments are append-only: recomputing creates a new row with its
+    own inputs, so the number a qualification decision relied on can
+    always be re-read exactly. ``unassessable`` rows persist the missing
+    input names instead of a result. Money is integer minor units in
+    the campaign's currency; the risk adjustment is a recorded
+    percentage input, never a hidden fudge factor.
+    """
+
+    __tablename__ = "campaign_assessments"
+    __table_args__ = (
+        Index("ix_campaign_assessments_campaign", "tenant_id", "campaign_id", "created_at"),
+        CheckConstraint("risk_percent >= 0 AND risk_percent <= 100", name="risk_percent_range"),
+        CheckConstraint(
+            "editing_cost_minor >= 0 AND model_cost_minor >= 0 AND distribution_cost_minor >= 0",
+            name="assessment_costs_nonnegative",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    campaign_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    state: Mapped[CampaignAssessmentState] = mapped_column(
+        Enum(CampaignAssessmentState, name="campaign_assessment_state"), nullable=False
+    )
+    missing_inputs: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    expected_views: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cpm_rate_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    gross_revenue_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    capped_by_max_payout: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    editing_cost_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    model_cost_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    distribution_cost_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    risk_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    risk_adjustment_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    expected_profit_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    campaign: Mapped[Campaign] = relationship(back_populates="assessments")
+
+
+class CampaignPublication(UUIDPrimaryKeyMixin, Base):
+    """The link between a campaign and one publication produced for it.
+
+    The link is attribution only: it records that a publication counts
+    toward this campaign, so payouts and analytics can be read per
+    campaign. Creating or removing a link changes no publication state.
+    """
+
+    __tablename__ = "campaign_publications"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "publication_id", name="uq_campaign_publication_pair"),
+        Index("ix_campaign_publications_tenant_campaign", "tenant_id", "campaign_id"),
+        Index("ix_campaign_publications_publication", "publication_id"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    campaign_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    publication_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("publications.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    campaign: Mapped[Campaign] = relationship(back_populates="publication_links")

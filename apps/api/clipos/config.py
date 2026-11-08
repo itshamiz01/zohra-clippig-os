@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Zohra ClipOS"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     environment: Environment = Environment.DEVELOPMENT
     api_prefix: str = "/api/v1"
     debug: bool = False
@@ -175,6 +175,18 @@ class Settings(BaseSettings):
     # layer offline (planner, plan creation and execution queueing all
     # refuse) without touching per-tenant kill switches.
     executive_enabled: bool = True
+
+    # v2.1 campaign economics. These are the recorded defaults a
+    # profitability assessment falls back to when the operator does not
+    # supply per-assessment cost inputs. They are configuration an
+    # operator sets deliberately — never observed market prices — and
+    # every assessment persists the exact inputs it used, so a default
+    # can always be told apart from a supplied value in the audit trail.
+    campaign_editing_cost_minor: int = Field(default=0, ge=0)
+    campaign_model_cost_minor: int = Field(default=0, ge=0)
+    campaign_distribution_cost_minor: int = Field(default=0, ge=0)
+    campaign_risk_percent: int = Field(default=0, ge=0, le=100)
+    campaign_max_import_records: int = Field(default=200, ge=1, le=2000)
 
     embedded_worker_enabled: bool = False
     worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30)

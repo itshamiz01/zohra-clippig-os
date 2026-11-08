@@ -147,6 +147,10 @@ REVENUE_SUMMARY_DEFINITIONS: dict[str, str] = {
         "sum of recurring records in issued/paid/overdue state; reported separately, "
         "never added to collected"
     ),
+    "campaign_payout": (
+        "sum of campaign_payout records in paid state only; money collected for a "
+        "v2.1 campaign, reported separately and never added to collected"
+    ),
 }
 
 
@@ -1347,6 +1351,7 @@ class CrmService:
         external_reference: str | None,
         occurred_at: datetime,
         notes: str | None,
+        campaign_id: UUID | None = None,
     ) -> RevenueRecord:
         await CrmService.get_account(session, principal.tenant_id, account_id)
         record = RevenueRecord(
@@ -1359,6 +1364,7 @@ class CrmService:
             external_reference=external_reference,
             occurred_at=occurred_at,
             notes=notes,
+            campaign_id=campaign_id,
             created_by_user_id=principal.user_id,
         )
         session.add(record)
@@ -1376,6 +1382,7 @@ class CrmService:
                 "status": status.value,
                 "amount_minor_units": amount_minor_units,
                 "currency": currency.upper(),
+                "campaign_id": str(campaign_id) if campaign_id is not None else None,
             },
         )
         await session.commit()
@@ -1422,6 +1429,7 @@ class CrmService:
                     "collected": 0,
                     "refunded": 0,
                     "recurring": 0,
+                    "campaign_payout": 0,
                 },
             )
             if record.kind == RevenueKind.QUOTE and record.status in _COMMITMENT_STATES:
@@ -1436,6 +1444,8 @@ class CrmService:
                 bucket["refunded"] += record.amount_minor_units
             elif record.kind == RevenueKind.RECURRING and record.status in _COMMITMENT_STATES:
                 bucket["recurring"] += record.amount_minor_units
+            elif record.kind == RevenueKind.CAMPAIGN_PAYOUT and record.status == RevenueState.PAID:
+                bucket["campaign_payout"] += record.amount_minor_units
         return {
             "account_id": str(account_id),
             "currencies": [
