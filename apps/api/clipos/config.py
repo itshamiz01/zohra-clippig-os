@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Zohra ClipOS"
-    version: str = "0.9.0"
+    version: str = "1.0.0"
     environment: Environment = Environment.DEVELOPMENT
     api_prefix: str = "/api/v1"
     debug: bool = False
@@ -168,6 +168,13 @@ class Settings(BaseSettings):
     # provider decisions; the validator below says exactly that.
     comms_provider: str = "disabled"
     payments_provider: str = "disabled"
+
+    # Phase 10 executive layer. The executive dispatches only internal,
+    # reversible actions from a closed registry, so there is no provider
+    # to enable; this switch exists so an operator can take the whole
+    # layer offline (planner, plan creation and execution queueing all
+    # refuse) without touching per-tenant kill switches.
+    executive_enabled: bool = True
 
     embedded_worker_enabled: bool = False
     worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30)
@@ -570,6 +577,12 @@ class Settings(BaseSettings):
             (
                 "CLIPOS_PAYMENTS_PROVIDER",
                 self.payments_provider != "disabled",
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_EXECUTIVE_ENABLED",
+                self.executive_enabled,
                 False,
                 False,
             ),

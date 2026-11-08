@@ -27,11 +27,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from clipos.core.enums import (
     ActionClass,
+    AgentDefinitionStatus,
+    AgentRole,
+    AgentRunState,
     AnalyticsCollectionState,
     ApprovalStatus,
     AssetSource,
     AssetState,
     AuditOutcome,
+    AutonomyClass,
     CandidateReviewAction,
     CandidateState,
     CrmStage,
@@ -41,6 +45,12 @@ from clipos.core.enums import (
     DiscoveryRunState,
     DiscoveryStrategy,
     EvidenceSource,
+    ExecutiveActionKind,
+    ExecutiveActionState,
+    ExecutiveControlMode,
+    ExecutivePlanState,
+    ExecutiveProposalKind,
+    ExecutiveProposalState,
     ExperimentState,
     GateCheckpoint,
     GateOutcome,
@@ -2244,3 +2254,311 @@ class OnboardingRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     account: Mapped[CrmAccount] = relationship(back_populates="onboarding_records")
+
+
+class AgentDefinition(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One registered agent contract for the Phase 10 executive layer.
+
+    Definitions are tenant-scoped; a row with ``tenant_id IS NULL`` and
+    ``is_system`` set is a platform-provided default that any tenant may
+    resolve against. ``contract`` is validated against the executive
+    action registry on write: it names the action kinds the agent may
+    run, the input/output schema versions it speaks, a per-run cost
+    budget (internal budget minor units), a per-dispatch timeout and a
+    per-plan step cap. A definition grants no external authority — the
+    registry it references contains only internal, reversible actions.
+    """
+
+    __tablename__ = "agent_definitions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_agent_definition_tenant_name"),
+        Index("ix_agent_definitions_tenant_role", "tenant_id", "role", "status"),
+    )
+
+    tenant_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True
+    )
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    role: Mapped[AgentRole] = mapped_column(Enum(AgentRole, name="agent_role"), nullable=False)
+    contract: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    status: Mapped[AgentDefinitionStatus] = mapped_column(
+        Enum(AgentDefinitionStatus, name="agent_definition_status"),
+        default=AgentDefinitionStatus.DISABLED,
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ExecutiveControl(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """The per-tenant executive kill switch and cost ceilings.
+
+    One row per tenant. ``mode`` is checked before a plan is queued and
+    again between every pair of actions during execution, so flipping
+    it to PAUSED stops a running plan at the next action boundary. The
+    Phase 1 platform-level SystemControl pause is a second, independent
+    layer and is honoured as well. Ceilings are internal budget minor
+    units (the same units action cost estimates use); NULL means no
+    ceiling of that kind.
+    """
+
+    __tablename__ = "executive_controls"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_executive_control_tenant"),
+        CheckConstraint(
+            "daily_cost_ceiling_minor IS NULL OR daily_cost_ceiling_minor >= 0",
+            name="ck_executive_control_daily_ceiling_nonnegative",
+        ),
+        CheckConstraint(
+            "per_action_cost_ceiling_minor IS NULL OR per_action_cost_ceiling_minor >= 0",
+            name="ck_executive_control_per_action_ceiling_nonnegative",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    mode: Mapped[ExecutiveControlMode] = mapped_column(
+        Enum(ExecutiveControlMode, name="executive_control_mode"),
+        default=ExecutiveControlMode.NORMAL,
+        nullable=False,
+    )
+    daily_cost_ceiling_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    per_action_cost_ceiling_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ExecutivePlan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One executive plan: a validated, ordered list of internal actions
+    with the trusted-state evidence it was derived from.
+
+    Plans are created whole (by the deterministic planner or manually
+    through the API) and are immutable once they leave DRAFT — there is
+    no edit path, so an approval can never be silently re-pointed at
+    different actions. ``approval_request_id`` links to the Phase 1
+    approvals system when the plan needs human approval; execution
+    re-reads that approval's status before the first action and refuses
+    to run on a missing, rejected or expired one.
+    """
+
+    __tablename__ = "executive_plans"
+    __table_args__ = (
+        Index("ix_executive_plans_tenant_status", "tenant_id", "status"),
+        CheckConstraint(
+            "total_estimated_cost_minor >= 0", name="ck_executive_plan_cost_nonnegative"
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[ExecutivePlanState] = mapped_column(
+        Enum(ExecutivePlanState, name="executive_plan_state"),
+        default=ExecutivePlanState.DRAFT,
+        nullable=False,
+    )
+    # ``created_by`` mirrors the Phase 7/9 pattern: "system" for the
+    # executive planner loop, otherwise the creating user's id as text;
+    # the FK below is the authoritative attribution when a user exists.
+    created_by: Mapped[str] = mapped_column(String(80), default="system", nullable=False)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rationale: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    total_estimated_cost_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    approval_request_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("approval_requests.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("background_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    execution_requested_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    actions: Mapped[list[ExecutiveAction]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="ExecutiveAction.sequence"
+    )
+
+
+class ExecutiveAction(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One step of an executive plan.
+
+    ``kind`` can only ever be a member of the closed registry enum, and
+    ``payload`` is re-validated against the kind's strict pydantic
+    schema both when the plan is created and again immediately before
+    dispatch — a tampered row therefore fails closed at execution time
+    instead of running. Costs are internal budget minor units.
+    """
+
+    __tablename__ = "executive_actions"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "sequence", name="uq_executive_action_plan_sequence"),
+        Index("ix_executive_actions_tenant_plan", "tenant_id", "plan_id"),
+        CheckConstraint("sequence >= 1", name="ck_executive_action_sequence_positive"),
+        CheckConstraint(
+            "cost_estimate_minor >= 0 AND cost_incurred_minor >= 0",
+            name="ck_executive_action_costs_nonnegative",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    plan_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("executive_plans.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[ExecutiveActionKind] = mapped_column(
+        Enum(ExecutiveActionKind, name="executive_action_kind"), nullable=False
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    autonomy_class: Mapped[AutonomyClass] = mapped_column(
+        Enum(AutonomyClass, name="autonomy_class"), nullable=False
+    )
+    status: Mapped[ExecutiveActionState] = mapped_column(
+        Enum(ExecutiveActionState, name="executive_action_state"),
+        default=ExecutiveActionState.PENDING,
+        nullable=False,
+    )
+    cost_estimate_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    cost_incurred_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    agent_definition_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("agent_definitions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    plan: Mapped[ExecutivePlan] = relationship(back_populates="actions")
+
+
+class AgentRun(UUIDPrimaryKeyMixin, Base):
+    """One agent's execution of one executive action.
+
+    The run snapshots the agent name/role at dispatch time (definitions
+    can be edited later), records steps used against the contract cap
+    and the internal budget units actually incurred. Internal
+    deterministic actions generate no provider usage, so
+    ``usage_cost_event_id`` stays NULL for them; it exists so a future
+    model-backed action can link the exact UsageCostEvent it produced.
+    """
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        Index("ix_agent_runs_tenant_plan", "tenant_id", "plan_id"),
+        Index("ix_agent_runs_tenant_agent", "tenant_id", "agent_id"),
+        CheckConstraint("steps_used >= 0", name="ck_agent_run_steps_nonnegative"),
+        CheckConstraint("cost_incurred_minor >= 0", name="ck_agent_run_cost_nonnegative"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("agent_definitions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    agent_role: Mapped[AgentRole] = mapped_column(
+        Enum(AgentRole, name="agent_role"), nullable=False
+    )
+    plan_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("executive_plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("executive_actions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[AgentRunState] = mapped_column(
+        Enum(AgentRunState, name="agent_run_state"),
+        default=AgentRunState.RUNNING,
+        nullable=False,
+    )
+    steps_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_incurred_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    usage_cost_event_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("usage_cost_events.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class ExecutiveProposal(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A versioned self-improvement proposal: a suggested change to
+    scoring weights, a prompt/template, or a policy text.
+
+    Proposals are records for human decision, nothing more. Review can
+    approve or reject one, but approval changes only this row — there
+    is no apply path in this system, so an approved proposal takes
+    effect only when a human makes the corresponding configuration
+    change separately and under its own audit trail.
+    """
+
+    __tablename__ = "executive_proposals"
+    __table_args__ = (
+        Index("ix_executive_proposals_tenant_state", "tenant_id", "state"),
+        CheckConstraint("version >= 1", name="ck_executive_proposal_version_positive"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[ExecutiveProposalKind] = mapped_column(
+        Enum(ExecutiveProposalKind, name="executive_proposal_kind"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    change_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    state: Mapped[ExecutiveProposalState] = mapped_column(
+        Enum(ExecutiveProposalState, name="executive_proposal_state"),
+        default=ExecutiveProposalState.PROPOSED,
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(80), default="system", nullable=False)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)

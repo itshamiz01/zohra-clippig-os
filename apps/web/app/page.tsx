@@ -13,14 +13,14 @@ export default function OverviewPage() {
   return <div>
     <section className="hero-grid">
       <div>
-        <p className="eyebrow">CONTROL ROOM / PHASE 09</p>
+        <p className="eyebrow">CONTROL ROOM / PHASE 10</p>
         <h1 className="hero-title">Publish with proof.<br/><em>Recover without duplication.</em></h1>
         <p className="hero-copy">Zohra ClipOS now adds a provider-neutral publishing boundary, a real YouTube adapter path, one-time PKCE OAuth state, encrypted grants, private-first releases, resumable progress, and reconciliation-safe job control. Live Google consent and upload remain operator verification boundaries.</p>
-        <div className="hero-actions"><Link className="primary-button" href="/publishing">Open publishing control <Icon name="arrow" className="h-4 w-4"/></Link><span className="version-stamp">v0.9.0 · sales CRM, drafts only — nothing sent</span></div>
+        <div className="hero-actions"><Link className="primary-button" href="/publishing">Open publishing control <Icon name="arrow" className="h-4 w-4"/></Link><span className="version-stamp">v1.0.0 · executive orchestration — internal actions only, nothing external</span></div>
       </div>
-      <div className="phase-orbit" aria-label="Phase nine of eleven implemented">
-        <div className="orbit-ring"><div className="orbit-center"><strong>09</strong><span>OF 11</span></div><i/></div>
-        <p>Private-first control active</p><small>2 guarded phases remain</small>
+      <div className="phase-orbit" aria-label="Phase ten of eleven implemented">
+        <div className="orbit-ring"><div className="orbit-center"><strong>10</strong><span>OF 11</span></div><i/></div>
+        <p>Closed action registry active</p><small>1 guarded phase remains</small>
       </div>
     </section>
 
@@ -46,7 +46,7 @@ export default function OverviewPage() {
     </section>
 
     <section className="next-gate">
-      <div><p className="eyebrow">CURRENT HANDOFF</p><h2>Phase 09 · Sales assistant, CRM and revenue operations</h2><p>Implemented as a backend control plane: idempotent intake from ready Phase 8 handoffs, a stage-validated pipeline with append-only history, conservative dedup with human-reviewed merges, opt-out suppression enforced at draft creation, evidence-cited draft sales assets with human review, tasks, onboarding, and revenue records whose kinds are never mixed. Communications and payments gateways are disabled — no provider has been chosen — so nothing is sent and no money moves. Next: Phase 10 · Autonomous CEO and orchestration — not implemented.</p></div><div className="locked-chip"><Icon name="lock" className="h-4 w-4"/> PHASE 10 LOCKED</div>
+      <div><p className="eyebrow">CURRENT HANDOFF</p><h2>Phase 10 · Autonomous CEO and multi-agent orchestration</h2><p>Implemented as a backend control plane: a deterministic, rule-based planner reads trusted analytics, opportunity, CRM, cost and queue state and writes evidence-cited draft plans. A closed registry limits the executive to six internal, reversible action kinds — recommendation generation, analytics collection, opportunity sync, CRM drafts, internal tasks and status reports. Publishing, sending, payments, deletion and permission, budget or autonomy changes are not in the registry and can never be dispatched. Approval-required plans go through the existing human approvals flow; tenant and platform kill switches, daily and per-action cost ceilings, and per-agent step, budget and timeout contracts are re-checked at execution time. Self-improvement proposals are decision records only — approving one changes nothing by itself. Next: Phase 11 · Production readiness audit and controlled launch — not implemented.</p></div><div className="locked-chip"><Icon name="lock" className="h-4 w-4"/> PHASE 11 LOCKED</div>
     </section>
   </div>;
 }

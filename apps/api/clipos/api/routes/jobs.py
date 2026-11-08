@@ -12,6 +12,7 @@ from clipos.models import RenderJob
 from clipos.queue import QueueMessage
 from clipos.schemas import JobCreate, JobResponse
 from clipos.services.analytics import ANALYTICS_JOB_KIND
+from clipos.services.executive import EXECUTIVE_JOB_KIND
 from clipos.services.jobs import JobService
 from clipos.services.opportunities import OPPORTUNITY_JOB_KIND
 from clipos.services.publishing import PUBLISH_JOB_KIND
@@ -71,6 +72,7 @@ async def create_internal_job(
         PUBLISH_JOB_KIND,
         ANALYTICS_JOB_KIND,
         OPPORTUNITY_JOB_KIND,
+        EXECUTIVE_JOB_KIND,
     }:
         raise ClipOSError(
             "reserved_job_kind",
@@ -127,6 +129,13 @@ async def cancel_job(
             "sync is idempotent, so trigger a new sync instead",
             status_code=409,
         )
+    if job.kind == EXECUTIVE_JOB_KIND:
+        raise ClipOSError(
+            "executive_job_domain_endpoint_required",
+            "executive execution jobs are managed through the executive endpoint; "
+            "pause or resume the plan there instead of cancelling its job",
+            status_code=409,
+        )
     if job.kind == RENDER_JOB_KIND:
         render_job_id = await session.scalar(
             select(RenderJob.id).where(
@@ -175,6 +184,13 @@ async def retry_job(
             "opportunity_job_domain_endpoint_required",
             "opportunity sync jobs are retried by triggering a new sync "
             "through the opportunities endpoint",
+            status_code=409,
+        )
+    if job.kind == EXECUTIVE_JOB_KIND:
+        raise ClipOSError(
+            "executive_job_domain_endpoint_required",
+            "executive execution jobs are retried by re-executing the plan "
+            "through the executive endpoint; completed actions are not re-run",
             status_code=409,
         )
     if job.kind == RENDER_JOB_KIND:

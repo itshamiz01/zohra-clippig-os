@@ -482,3 +482,117 @@ class OnboardingState(StrEnum):
     IN_PROGRESS = "in_progress"
     BLOCKED = "blocked"
     COMPLETED = "completed"
+
+
+class AgentRole(StrEnum):
+    """The closed set of agent roles the Phase 10 executive layer may
+    register. Roles describe which internal work an agent contract may
+    cover; a role never grants external authority."""
+
+    RESEARCHER = "researcher"
+    PLANNER = "planner"
+    ANALYST = "analyst"
+    REVIEWER = "reviewer"
+    EXECUTOR = "executor"
+
+
+class AgentDefinitionStatus(StrEnum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
+class AgentRunState(StrEnum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
+class ExecutivePlanState(StrEnum):
+    """Executive plan lifecycle. A plan is executable only from APPROVED
+    (or resumable from PAUSED); approval comes either from the existing
+    approvals system or, for plans whose actions are all auto-internal
+    and inside every ceiling, from the recorded auto-approval at submit
+    time. There is no path from DRAFT to EXECUTING."""
+
+    DRAFT = "draft"
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+
+
+class ExecutiveActionKind(StrEnum):
+    """The CLOSED registry of action kinds the executive may dispatch.
+
+    Every member is internal and reversible: it creates internal records
+    (recommendations, drafts, tasks), runs internal read-mostly passes
+    (analytics collection, opportunity sync) or compiles a report.
+    Publishing, sending, payments, deletion, permission changes, budget
+    changes and autonomy changes are deliberately absent — a plan that
+    names any other kind fails validation and can never execute.
+    """
+
+    GENERATE_RECOMMENDATIONS = "generate_recommendations"
+    RUN_ANALYTICS_COLLECTION = "run_analytics_collection"
+    SYNC_OPPORTUNITY_SOURCE = "sync_opportunity_source"
+    CREATE_CRM_DRAFT = "create_crm_draft"
+    CREATE_INTERNAL_TASK = "create_internal_task"
+    NOOP_REPORT = "noop_report"
+
+
+class AutonomyClass(StrEnum):
+    """How much authority one executive action carries.
+
+    AUTO_INTERNAL actions may run under a plan-level auto-approval when
+    every ceiling permits; APPROVAL_REQUIRED actions force the whole
+    plan through the human approvals system first.
+    """
+
+    AUTO_INTERNAL = "auto_internal"
+    APPROVAL_REQUIRED = "approval_required"
+
+
+class ExecutiveActionState(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    BLOCKED = "blocked"
+
+
+class ExecutiveControlMode(StrEnum):
+    """Per-tenant executive kill-switch modes.
+
+    NORMAL honours plan approvals and ceilings; HUMAN_APPROVAL_ALL
+    forces every plan through the approvals system regardless of action
+    classes; PAUSED is the kill switch — no action executes while it is
+    set, and a plan caught mid-execution stops between actions.
+    """
+
+    NORMAL = "normal"
+    HUMAN_APPROVAL_ALL = "human_approval_all"
+    PAUSED = "paused"
+
+
+class ExecutiveProposalKind(StrEnum):
+    SCORING_WEIGHTS = "scoring_weights"
+    PROMPT_TEMPLATE = "prompt_template"
+    POLICY = "policy"
+    OTHER = "other"
+
+
+class ExecutiveProposalState(StrEnum):
+    """Self-improvement proposal lifecycle. Approval records a human
+    decision only: there is deliberately no APPLIED state, because
+    applying an approved proposal is a separate, manual, audited
+    configuration change outside this system."""
+
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"

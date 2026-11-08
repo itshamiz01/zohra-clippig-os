@@ -18,6 +18,7 @@ from clipos.api.routes import (
     crm,
     diagnostics,
     discovery,
+    executive,
     health,
     jobs,
     opportunities,
@@ -50,6 +51,7 @@ from clipos.models import SystemControl  # noqa: F401 - registers all model meta
 from clipos.queue import InMemoryQueueBroker, QueueBroker, RedisQueueBroker
 from clipos.services.analytics_processing import AnalyticsProcessor
 from clipos.services.asset_processing import AssetProcessingService
+from clipos.services.executive_processing import ExecutiveProcessor
 from clipos.services.opportunity_processing import OpportunityProcessor
 from clipos.services.providers import ProviderStatusService
 from clipos.services.publish_processing import PublishProcessor
@@ -158,17 +160,25 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
             registry=app.state.opportunity_adapters,
             settings=settings,
         )
+        executive_processor = ExecutiveProcessor(
+            session_factory=session_factory,
+            analytics_registry=app.state.analytics_adapters,
+            opportunity_registry=app.state.opportunity_adapters,
+            settings=settings,
+        )
         app.state.asset_processor = asset_processor
         app.state.render_processor = render_processor
         app.state.publish_processor = publish_processor
         app.state.analytics_processor = analytics_processor
         app.state.opportunity_processor = opportunity_processor
+        app.state.executive_processor = executive_processor
         worker = ClipOSWorker(
             asset_processor=asset_processor,
             render_processor=render_processor,
             publish_processor=publish_processor,
             analytics_processor=analytics_processor,
             opportunity_processor=opportunity_processor,
+            executive_processor=executive_processor,
             session_factory=session_factory,
             queue=queue,
             settings=settings,
@@ -203,7 +213,7 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version=settings.version,
         description=(
-            "Safety-first Phase 9 media and sales control plane with provider-neutral "
+            "Safety-first Phase 10 media, sales and executive control plane with provider-neutral "
             "publishing contracts, "
             "encrypted OAuth credentials, a resumable YouTube adapter, private-first releases, "
             "mandatory fresh quality/rights gates, exact public-visibility approval, durable job "
@@ -221,7 +231,14 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
             "assets with human review and no send path, tasks, onboarding, and revenue "
             "records whose kinds are reported strictly separately. Communications and "
             "payments gateways are disabled — no provider has been chosen — so nothing is "
-            "sent and no money moves. Unrelated providers remain disabled "
+            "sent and no money moves. Phase 10 adds the executive layer: registered agent "
+            "contracts, a deterministic planner that cites the trusted state it consumed, "
+            "and plan execution restricted to a closed registry of internal, reversible "
+            "actions (recommendations, analytics collection, opportunity sync, CRM drafts "
+            "and tasks, status reports), gated by the existing approvals system, per-tenant "
+            "cost ceilings and a kill switch that is re-checked between actions, on top of "
+            "the platform pause. Self-improvement proposals can be recorded and approved "
+            "but never applied from inside the system. Unrelated providers remain disabled "
             "and real provider verification is reported separately from mocked evidence."
         ),
         lifespan=lifespan,
@@ -262,14 +279,15 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
     app.include_router(analytics.router, prefix=settings.api_prefix)
     app.include_router(opportunities.router, prefix=settings.api_prefix)
     app.include_router(crm.router, prefix=settings.api_prefix)
+    app.include_router(executive.router, prefix=settings.api_prefix)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, Any]:
         return {
             "name": settings.app_name,
             "version": settings.version,
-            "phase": 9,
-            "status": "sales_crm_draft_only_no_sending_no_payments",
+            "phase": 10,
+            "status": "executive_internal_actions_only_no_external_surface",
             "health": "/healthz",
             "readiness": "/readyz",
         }

@@ -1,4 +1,4 @@
-# Database and migrations — Phase 6
+# Database and migrations — Phase 10
 
 ## Supported modes
 
@@ -28,10 +28,12 @@ c7d40e02a0b4  Phase 7 analytics, experiments and learning
     ↓
 0b728736cdd4  Phase 8 opportunity hunter and commercial fit
     ↓
-e37c610043af  Phase 9 sales assistant, CRM, onboarding and revenue (head)
+e37c610043af  Phase 9 sales assistant, CRM, onboarding and revenue
+    ↓
+a162cab389d6  Phase 10 executive orchestration (head)
 ```
 
-All revisions are additive. Phase 9 does not rewrite an accepted historical migration.
+All revisions are additive. Phase 10 does not rewrite an accepted historical migration.
 
 ## Phase 4 tables
 
@@ -416,9 +418,46 @@ revenue_kind, revenue_state, onboarding_state
 
 The Phase 9 migration creates exactly these seven types on PostgreSQL and drops them on downgrade.
 
+## Phase 10 tables
+
+### `agent_definitions`
+
+One named agent contract: tenant (nullable — a null tenant with `is_system` marks a platform default definition), `name`, `role` (`researcher`, `planner`, `analyst`, `reviewer`, `executor`), the `contract` JSON (allowed action kinds — validated against the closed registry, so a contract can narrow but never widen it — input/output schema versions, per-run cost budget, timeout seconds, max steps), `status` (`enabled`, `disabled`) and a `version` counter the service increments on every update. There are no seeded system definitions; with none configured, execution uses a built-in default contract recorded as `agent_definition_id = NULL` on runs.
+
+### `executive_controls`
+
+The tenant kill switch and budget ceilings — exactly one row per tenant (`UNIQUE (tenant_id)`), created lazily by the service: `mode` (`normal`, `human_approval_all`, `paused`), nullable `daily_cost_ceiling_minor` and `per_action_cost_ceiling_minor` (null means uncapped), and `updated_by_user_id`. This is the tenant layer only; the Phase 1 platform `SystemControl` pause applies independently on top of it.
+
+### `executive_plans`
+
+One executive plan: tenant, title, objective, the `status` lifecycle (`draft`, `pending_approval`, `approved`, `executing`, `completed`, `failed`, `paused`, `cancelled`), `created_by` (`system` for planner output, otherwise the creating user's id) plus the creating user FK, `rationale`, the `evidence` JSON snapshot the planner consumed (per-section `as_of` timestamps), `total_estimated_cost_minor`, the optional Phase 1 `approval_request_id` (set null) with approver and timestamp, the execution job and requesting user recorded when execution is queued, start/finish timestamps, and the failure category/message pair.
+
+### `executive_actions`
+
+One planned action: tenant, plan (cascade), `sequence` (`UNIQUE (plan_id, sequence)`), `kind` — the `executive_action_kind` enum is the closed registry expressed at the database level — the strict-schema-validated `payload` JSON, the registry-stamped `autonomy_class` (`auto_internal`, `approval_required`), the `status` lifecycle (`pending`, `running`, `succeeded`, `failed`, `skipped`), cost estimate and incurred minor units, the `result` JSON, failure category/message, the agent definition used (set null) and `executed_at`.
+
+### `agent_runs`
+
+One execution record per dispatched action: tenant, the agent definition (set null; null means the built-in default ran) with the snapshot `agent_name` and `agent_role` (so history survives later definition edits), optional plan, action and Phase 1 `usage_cost_event` links (all set null), `status` (`queued`, `running`, `succeeded`, `failed`, `timed_out`), steps used, cost incurred, start/finish timestamps and failure category/message. Executive costs are internal orchestration accounting in minor units; no run in v1 creates a `UsageCostEvent`, because no provider call is made.
+
+### `executive_proposals`
+
+One self-improvement decision record: tenant, `kind` (`scoring_weights`, `prompt`, `policy`, `planner_rule`, `other`), title, summary, the `change_payload` JSON, `state` (`proposed`, `approved`, `rejected`) and a `version` counter. There are deliberately **no** applied-state or applied-at columns: an approved proposal records a human decision and nothing more — applying it is a separate, manual, audited configuration change outside this system, and no code path in Phase 10 mutates configuration from a proposal.
+
+## Phase 10 native enums
+
+```text
+agent_role, agent_definition_status, agent_run_state,
+executive_plan_state, executive_action_kind, autonomy_class,
+executive_action_state, executive_control_mode,
+executive_proposal_kind, executive_proposal_state
+```
+
+The Phase 10 migration creates exactly these ten types on PostgreSQL and drops them on downgrade.
+
 ## Tenant isolation
 
-Every Phase 2–9 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant, recommendation, opportunity-source, sync-run, opportunity, score-component, suppression, handoff, CRM contact, CRM account, pipeline-event, draft, task, revenue-record and onboarding queries. Storage is also tenant-prefixed.
+Every Phase 2–10 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant, recommendation, opportunity-source, sync-run, opportunity, score-component, suppression, handoff, CRM contact, CRM account, pipeline-event, draft, task, revenue-record, onboarding, agent-definition, executive-control, executive-plan, executive-action, agent-run and executive-proposal queries. Storage is also tenant-prefixed. (`agent_definitions` additionally carries platform rows with a null tenant; those are readable as system defaults but never writable through tenant endpoints, and a tenant predicate never matches another tenant's rows.)
 
 The schema uses ordinary foreign keys plus service-level tenant predicates rather than PostgreSQL row-level security. Live PostgreSQL RLS was not claimed.
 
@@ -447,11 +486,11 @@ export PYTHONPATH=apps/api
 # Verify ORM/migration agreement
 .venv/bin/alembic check
 
-# Roll back Phase 9 only
-.venv/bin/alembic downgrade 0b728736cdd4
+# Roll back Phase 10 only
+.venv/bin/alembic downgrade e37c610043af
 
-# Restore Phase 9
-.venv/bin/alembic upgrade e37c610043af
+# Restore Phase 10
+.venv/bin/alembic upgrade a162cab389d6
 ```
 
 Offline PostgreSQL contracts:
