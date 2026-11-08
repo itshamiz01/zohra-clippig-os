@@ -34,6 +34,8 @@ from clipos.core.enums import (
     AuditOutcome,
     CandidateReviewAction,
     CandidateState,
+    CrmStage,
+    CrmTaskState,
     DestinationPlatform,
     DiarizationState,
     DiscoveryRunState,
@@ -48,6 +50,7 @@ from clipos.core.enums import (
     MembershipStatus,
     MetricAvailability,
     OAuthConnectionState,
+    OnboardingState,
     OpportunityHandoffState,
     OpportunitySourceKind,
     OpportunitySourceStatus,
@@ -64,10 +67,14 @@ from clipos.core.enums import (
     RecommendationKind,
     RecommendationState,
     RenderState,
+    RevenueKind,
+    RevenueState,
     RightsBasis,
     RightsEvidenceStatus,
     RightsScope,
     Role,
+    SalesAssetKind,
+    SalesAssetState,
     SuppressionMatchType,
     TenantStatus,
     TranscriptState,
@@ -1921,3 +1928,319 @@ class OpportunityHandoff(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     created_by_user_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+
+
+class CrmContact(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One person known to the Phase 9 CRM.
+
+    The only contact route stored is ``contact_route_label`` — a text
+    label of a public route (for example "business email listed on
+    channel page"), carried over from Phase 8. ClipOS never stores
+    scraped private email addresses or phone numbers, and Phase 9 has no
+    code path that contacts anyone. ``suppressed`` is the opt-out flag:
+    a suppressed contact must never receive new sales drafts.
+    """
+
+    __tablename__ = "crm_contacts"
+    __table_args__ = (
+        Index("ix_crm_contacts_tenant_dedup", "tenant_id", "dedup_key"),
+        Index("ix_crm_contacts_tenant_suppressed", "tenant_id", "suppressed"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    display_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    organisation: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    role_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    contact_route_label: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    source_opportunity_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    dedup_key: Mapped[str] = mapped_column(String(600), nullable=False)
+    possible_duplicate_of_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_contacts.id", ondelete="SET NULL"), nullable=True
+    )
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    suppression_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    accounts: Mapped[list[CrmAccount]] = relationship(
+        back_populates="primary_contact", foreign_keys="CrmAccount.primary_contact_id"
+    )
+
+
+class CrmAccount(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One prospect or client organisation in the Phase 9 pipeline.
+
+    ``source_handoff_id`` is unique: a Phase 8 handoff can be taken into
+    the CRM exactly once, which is what makes intake idempotent.
+    ``stage`` is the current lifecycle position; every change is recorded
+    as an append-only :class:`CrmPipelineEvent`.
+    """
+
+    __tablename__ = "crm_accounts"
+    __table_args__ = (
+        UniqueConstraint("source_handoff_id", name="uq_crm_account_source_handoff"),
+        UniqueConstraint(
+            "tenant_id", "source_opportunity_id", name="uq_crm_account_source_opportunity"
+        ),
+        Index("ix_crm_accounts_tenant_stage", "tenant_id", "stage"),
+        Index("ix_crm_accounts_tenant_dedup", "tenant_id", "dedup_key"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    stage: Mapped[CrmStage] = mapped_column(
+        Enum(CrmStage, name="crm_stage"), default=CrmStage.PROSPECT, nullable=False
+    )
+    owner_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    primary_contact_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_contacts.id", ondelete="SET NULL"), nullable=True
+    )
+    source_opportunity_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_handoff_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunity_handoffs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    dedup_key: Mapped[str] = mapped_column(String(600), nullable=False)
+    possible_duplicate_of_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    next_action: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    primary_contact: Mapped[CrmContact | None] = relationship(
+        back_populates="accounts", foreign_keys=[primary_contact_id]
+    )
+    pipeline_events: Mapped[list[CrmPipelineEvent]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+    drafts: Mapped[list[SalesAssetDraft]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+    tasks: Mapped[list[CrmTask]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+    revenue_records: Mapped[list[RevenueRecord]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+    onboarding_records: Mapped[list[OnboardingRecord]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )
+
+
+class CrmPipelineEvent(UUIDPrimaryKeyMixin, Base):
+    """One append-only entry in an account's (or contact's) history.
+
+    Stage transitions set ``event_kind='stage_transition'`` with from/to
+    stages; reviewed dedup merges set ``event_kind='merge'``. Rows are
+    never updated or deleted by the service — the table is the history.
+    """
+
+    __tablename__ = "crm_pipeline_events"
+    __table_args__ = (
+        Index("ix_crm_pipeline_events_tenant_account", "tenant_id", "account_id"),
+        Index("ix_crm_pipeline_events_tenant_contact", "tenant_id", "contact_id"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="CASCADE"), nullable=True
+    )
+    contact_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_contacts.id", ondelete="CASCADE"), nullable=True
+    )
+    event_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    from_stage: Mapped[CrmStage | None] = mapped_column(
+        Enum(CrmStage, name="crm_stage"), nullable=True
+    )
+    to_stage: Mapped[CrmStage | None] = mapped_column(
+        Enum(CrmStage, name="crm_stage"), nullable=True
+    )
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    account: Mapped[CrmAccount | None] = relationship(back_populates="pipeline_events")
+
+
+class SalesAssetDraft(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One draft sales asset: outreach copy, a follow-up, a proposal
+    outline, a discovery agenda or an onboarding checklist draft.
+
+    Drafts are assembled only from cited stored evidence — ``evidence``
+    carries the citation list and a draft with zero citations cannot be
+    created. The lifecycle ends at ``approved`` (or ``rejected`` /
+    ``archived``): there is no sent state, because Phase 9 has no send
+    path and approval grants no sending capability.
+    """
+
+    __tablename__ = "sales_asset_drafts"
+    __table_args__ = (
+        Index("ix_sales_asset_drafts_tenant_account", "tenant_id", "account_id"),
+        Index("ix_sales_asset_drafts_tenant_status", "tenant_id", "status"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    contact_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_contacts.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[SalesAssetKind] = mapped_column(
+        Enum(SalesAssetKind, name="sales_asset_kind"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    status: Mapped[SalesAssetState] = mapped_column(
+        Enum(SalesAssetState, name="sales_asset_state"),
+        default=SalesAssetState.DRAFT,
+        nullable=False,
+    )
+    template_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Drafts are authored either by the deterministic template generator
+    # ("system") or by a user; the reviewer fields record the human
+    # decision, mirroring the Phase 7 recommendation pattern.
+    created_by: Mapped[str] = mapped_column(String(80), default="system", nullable=False)
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    account: Mapped[CrmAccount] = relationship(back_populates="drafts")
+
+
+class CrmTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One follow-up task attached to a CRM account."""
+
+    __tablename__ = "crm_tasks"
+    __table_args__ = (
+        Index("ix_crm_tasks_tenant_account", "tenant_id", "account_id"),
+        Index("ix_crm_tasks_tenant_status", "tenant_id", "status"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[CrmTaskState] = mapped_column(
+        Enum(CrmTaskState, name="crm_task_state"), default=CrmTaskState.OPEN, nullable=False
+    )
+    assignee_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    account: Mapped[CrmAccount] = relationship(back_populates="tasks")
+
+
+class RevenueRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One money-related record for a CRM account.
+
+    Kinds stay distinct forever: a ``quote`` records what was quoted, a
+    ``contract`` what was agreed, an ``invoice`` what was billed, a
+    ``payment`` what was collected, a ``refund`` what was returned and a
+    ``recurring`` record a recurring commitment. Summaries never add one
+    kind into another kind's bucket, and ``external_reference`` is only
+    ever an operator-recorded provider reference string — Phase 9 has no
+    payments integration and moves no money.
+    """
+
+    __tablename__ = "revenue_records"
+    __table_args__ = (
+        Index("ix_revenue_records_tenant_account", "tenant_id", "account_id"),
+        Index("ix_revenue_records_tenant_kind_status", "tenant_id", "kind", "status"),
+        CheckConstraint("amount_minor_units >= 0", name="amount_nonnegative"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[RevenueKind] = mapped_column(
+        Enum(RevenueKind, name="revenue_kind"), nullable=False
+    )
+    amount_minor_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[RevenueState] = mapped_column(
+        Enum(RevenueState, name="revenue_state"), default=RevenueState.DRAFT, nullable=False
+    )
+    external_reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    account: Mapped[CrmAccount] = relationship(back_populates="revenue_records")
+
+
+class OnboardingRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """The onboarding state for one client account (one record each).
+
+    ``checklist`` is the JSON checklist state (items with key, label and
+    done flag) and ``milestones`` the recorded milestone list. Completing
+    onboarding requires every checklist item to be done.
+    """
+
+    __tablename__ = "onboarding_records"
+    __table_args__ = (
+        UniqueConstraint("account_id", name="uq_onboarding_record_account"),
+        Index("ix_onboarding_records_tenant_status", "tenant_id", "status"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("crm_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    checklist: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    milestones: Mapped[list[Any]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    status: Mapped[OnboardingState] = mapped_column(
+        Enum(OnboardingState, name="onboarding_state"),
+        default=OnboardingState.NOT_STARTED,
+        nullable=False,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    account: Mapped[CrmAccount] = relationship(back_populates="onboarding_records")

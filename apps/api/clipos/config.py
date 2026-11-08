@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Zohra ClipOS"
-    version: str = "0.8.0"
+    version: str = "0.9.0"
     environment: Environment = Environment.DEVELOPMENT
     api_prefix: str = "/api/v1"
     debug: bool = False
@@ -159,6 +159,15 @@ class Settings(BaseSettings):
     )
     opportunity_fetch_max_redirects: int = Field(default=3, ge=0, le=5)
     opportunity_max_import_records: int = Field(default=500, ge=1, le=5000)
+
+    # Phase 9 sales/CRM gateways. Fail-closed by design: no email,
+    # calendar or payment provider has been chosen yet, so the only
+    # valid values are "disabled" and the explicitly mocked "fake"
+    # (tests/local only). Naming a real provider is a configuration
+    # error until the user makes — and a later phase implements — the
+    # provider decisions; the validator below says exactly that.
+    comms_provider: str = "disabled"
+    payments_provider: str = "disabled"
 
     embedded_worker_enabled: bool = False
     worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30)
@@ -312,6 +321,40 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CLIPOS_OPPORTUNITY_PROVIDER=fake is forbidden in staging/production; "
                 "mocked opportunities must never be served as production evidence"
+            )
+        if self.comms_provider not in {"disabled", "fake"}:
+            raise ValueError(
+                f"CLIPOS_COMMS_PROVIDER={self.comms_provider!r} names a real communications "
+                "provider, but no email provider decision has been made for Phase 9: the "
+                "email provider, calendar provider and payment provider decisions are "
+                "still owed by the user, and no provider integration exists in this "
+                "phase. Communications stay disabled (or the mocked fake in tests/local) "
+                "until those decisions are made and a provider is reviewed and integrated."
+            )
+        if self.payments_provider not in {"disabled", "fake"}:
+            raise ValueError(
+                f"CLIPOS_PAYMENTS_PROVIDER={self.payments_provider!r} names a real payment "
+                "provider, but no payment provider decision has been made for Phase 9: "
+                "the payment provider decision is still owed by the user, and no "
+                "provider integration exists in this phase. Payments stay disabled "
+                "(or the mocked fake in tests/local) until that decision is made and a "
+                "provider is reviewed and integrated in test mode."
+            )
+        if self.comms_provider == "fake" and self.environment in {
+            Environment.STAGING,
+            Environment.PRODUCTION,
+        }:
+            raise ValueError(
+                "CLIPOS_COMMS_PROVIDER=fake is forbidden in staging/production; "
+                "mocked communications must never be served as production evidence"
+            )
+        if self.payments_provider == "fake" and self.environment in {
+            Environment.STAGING,
+            Environment.PRODUCTION,
+        }:
+            raise ValueError(
+                "CLIPOS_PAYMENTS_PROVIDER=fake is forbidden in staging/production; "
+                "mocked payments must never be served as production evidence"
             )
         storage_root = self.storage_local_root.resolve()
         render_temp_root = self.render_temp_root.resolve()
@@ -515,6 +558,18 @@ class Settings(BaseSettings):
             (
                 "CLIPOS_OPPORTUNITY_RSS_ENABLED",
                 self.opportunity_rss_enabled,
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_COMMS_PROVIDER",
+                self.comms_provider != "disabled",
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_PAYMENTS_PROVIDER",
+                self.payments_provider != "disabled",
                 False,
                 False,
             ),

@@ -408,3 +408,77 @@ class SuppressionMatchType(StrEnum):
 class OpportunityHandoffState(StrEnum):
     DRAFT = "draft"
     READY = "ready"
+
+
+class CrmStage(StrEnum):
+    """The Phase 9 CRM lifecycle, in pipeline order.
+
+    ``rejected`` and ``lost`` are terminal side-states reachable from any
+    non-terminal stage; they are not part of the forward order.
+    """
+
+    PROSPECT = "prospect"
+    QUALIFIED_LEAD = "qualified_lead"
+    CONVERSATION = "conversation"
+    DISCOVERY_CALL = "discovery_call"
+    PROPOSAL = "proposal"
+    CONTRACT_REVIEW = "contract_review"
+    CLIENT = "client"
+    CAMPAIGN = "campaign"
+    DELIVERABLE = "deliverable"
+    INVOICED = "invoiced"
+    RETAINED = "retained"
+    REJECTED = "rejected"
+    LOST = "lost"
+
+
+class SalesAssetKind(StrEnum):
+    OUTREACH_MESSAGE = "outreach_message"
+    FOLLOW_UP = "follow_up"
+    PROPOSAL_OUTLINE = "proposal_outline"
+    DISCOVERY_AGENDA = "discovery_agenda"
+    ONBOARDING_CHECKLIST = "onboarding_checklist"
+
+
+class SalesAssetState(StrEnum):
+    """Draft lifecycle. There is deliberately no SENT state: Phase 9 has
+    no send path, and approving a draft grants no sending capability."""
+
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ARCHIVED = "archived"
+
+
+class CrmTaskState(StrEnum):
+    OPEN = "open"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+class RevenueKind(StrEnum):
+    """Revenue record kinds. The kinds are never interchangeable in
+    reporting: a quote is not a contract, and neither is collected money."""
+
+    QUOTE = "quote"
+    CONTRACT = "contract"
+    INVOICE = "invoice"
+    PAYMENT = "payment"
+    REFUND = "refund"
+    RECURRING = "recurring"
+
+
+class RevenueState(StrEnum):
+    DRAFT = "draft"
+    ISSUED = "issued"
+    PAID = "paid"
+    VOID = "void"
+    OVERDUE = "overdue"
+
+
+class OnboardingState(StrEnum):
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
