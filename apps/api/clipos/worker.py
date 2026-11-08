@@ -13,6 +13,7 @@ from clipos.media.tooling import MediaTooling
 from clipos.queue import RedisQueueBroker
 from clipos.services.analytics_processing import AnalyticsProcessor
 from clipos.services.asset_processing import AssetProcessingService
+from clipos.services.executive_processing import ExecutiveProcessor
 from clipos.services.opportunity_processing import OpportunityProcessor
 from clipos.services.publish_processing import PublishProcessor
 from clipos.services.rendering import RenderProcessor
@@ -69,12 +70,19 @@ async def run_worker() -> None:
         registry=opportunity_adapters,
         settings=settings,
     )
+    executive_processor = ExecutiveProcessor(
+        session_factory=factory,
+        analytics_registry=analytics_adapters,
+        opportunity_registry=opportunity_adapters,
+        settings=settings,
+    )
     worker = ClipOSWorker(
         asset_processor=asset_processor,
         render_processor=render_processor,
         publish_processor=publish_processor,
         analytics_processor=analytics_processor,
         opportunity_processor=opportunity_processor,
+        executive_processor=executive_processor,
         session_factory=factory,
         queue=queue,
         settings=settings,

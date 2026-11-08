@@ -1,4 +1,6 @@
 from clipos.models.entities import (
+    AgentDefinition,
+    AgentRun,
     AnalyticsCollectionRun,
     AnalyticsMetricSnapshot,
     ApprovalRequest,
@@ -14,6 +16,10 @@ from clipos.models.entities import (
     CrmPipelineEvent,
     CrmTask,
     DiscoveryRun,
+    ExecutiveAction,
+    ExecutiveControl,
+    ExecutivePlan,
+    ExecutiveProposal,
     Experiment,
     ExperimentVariant,
     FeatureFlag,
@@ -56,6 +62,8 @@ from clipos.models.entities import (
 )
 
 __all__ = [
+    "AgentDefinition",
+    "AgentRun",
     "AnalyticsCollectionRun",
     "AnalyticsMetricSnapshot",
     "ApprovalRequest",
@@ -71,6 +79,10 @@ __all__ = [
     "CrmPipelineEvent",
     "CrmTask",
     "DiscoveryRun",
+    "ExecutiveAction",
+    "ExecutiveControl",
+    "ExecutivePlan",
+    "ExecutiveProposal",
     "Experiment",
     "ExperimentVariant",
     "FeatureFlag",
