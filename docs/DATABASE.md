@@ -26,10 +26,12 @@ d4a9a9290b9a  Phase 6 gated YouTube publishing
     ↓
 c7d40e02a0b4  Phase 7 analytics, experiments and learning
     ↓
-0b728736cdd4  Phase 8 opportunity hunter and commercial fit (head)
+0b728736cdd4  Phase 8 opportunity hunter and commercial fit
+    ↓
+e37c610043af  Phase 9 sales assistant, CRM, onboarding and revenue (head)
 ```
 
-All revisions are additive. Phase 8 does not rewrite an accepted historical migration.
+All revisions are additive. Phase 9 does not rewrite an accepted historical migration.
 
 ## Phase 4 tables
 
@@ -360,9 +362,63 @@ opportunity_state, suppression_match_type, opportunity_handoff_state
 
 The Phase 8 migration creates exactly these six types on PostgreSQL and drops them on downgrade; `provider_mode` is referenced from Phase 1 without recreation.
 
+## Phase 9 tables
+
+### `crm_contacts`
+
+One person known to the CRM:
+
+- tenant, display name, optional organisation and role/title, and a *labelled* public contact route (never a scraped private address or number);
+- optional source opportunity (set null) linking back to the Phase 8 record the contact came from;
+- `dedup_key` (indexed per tenant) driving exact-match merging, and `possible_duplicate_of_id` (set null) recording a fuzzy match flagged for human review — fuzzy matches are never merged automatically;
+- the opt-out pair `suppressed` + `suppression_reason`: a suppressed contact is refused new sales drafts, and suppression survives merges.
+
+### `crm_accounts`
+
+One prospect or client organisation:
+
+- tenant, name, lifecycle `stage` (the `crm_stage` enum), optional owner user (set null) and primary contact (set null);
+- optional source opportunity and source handoff — `UNIQUE (source_handoff_id)` and `UNIQUE (tenant_id, source_opportunity_id)` are what make Phase 9 intake idempotent;
+- `dedup_key` (indexed per tenant) and `possible_duplicate_of_id` for the same conservative dedup as contacts;
+- `next_action`/`next_action_at` and a free-text `notes_summary`.
+
+### `crm_pipeline_events`
+
+The append-only history for accounts and contacts: tenant, optional account (cascade) and contact (cascade), `event_kind` (`created`, `intake`, `stage_transition`, `merge`), nullable from/to stages, actor and reason, and `created_at`. Rows are never updated or deleted by the service; stage history and reviewed merges are both recorded here.
+
+### `sales_asset_drafts`
+
+One draft sales asset (outreach message, follow-up, proposal outline, discovery agenda, onboarding checklist):
+
+- tenant, account (cascade), optional contact (set null) and `kind`;
+- title and body, plus the `evidence` JSON citation list the asset was assembled from — a draft with zero citations cannot be created;
+- `status` (`draft`, `in_review`, `approved`, `rejected`, `archived`) — there is deliberately no sent state, because Phase 9 has no send path;
+- `template_version`, `created_by` (`system` for the deterministic generator, otherwise the authoring user's id) and the reviewer fields.
+
+### `crm_tasks`
+
+Follow-up tasks per account: tenant, account (cascade), title, optional due date, `status` (`open`, `done`, `cancelled`), optional assignee and creating user. Assignees are validated as tenant members by the service.
+
+### `revenue_records`
+
+One money-related record per row, with kinds kept strictly distinct: `kind` (`quote`, `contract`, `invoice`, `payment`, `refund`, `recurring`), `amount_minor_units` (bigint, check-constrained non-negative), 3-letter `currency`, `status` (`draft`, `issued`, `paid`, `void`, `overdue`), an optional operator-recorded `external_reference`, `occurred_at` and notes. Summaries count commitment kinds only in issued/paid/overdue states and money kinds only when `paid`, so a quote is never reported as collected revenue.
+
+### `onboarding_records`
+
+One onboarding record per client account (`UNIQUE (account_id)`): tenant, account (cascade), the `checklist` JSON state (versioned items with key/label/done), the `milestones` JSON list, `status` (`not_started`, `in_progress`, `blocked`, `completed`) and creating user. Completion requires every checklist item done.
+
+## Phase 9 native enums
+
+```text
+crm_stage, crm_task_state, sales_asset_kind, sales_asset_state,
+revenue_kind, revenue_state, onboarding_state
+```
+
+The Phase 9 migration creates exactly these seven types on PostgreSQL and drops them on downgrade.
+
 ## Tenant isolation
 
-Every Phase 2–8 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant, recommendation, opportunity-source, sync-run, opportunity, score-component, suppression and handoff queries. Storage is also tenant-prefixed.
+Every Phase 2–9 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant, recommendation, opportunity-source, sync-run, opportunity, score-component, suppression, handoff, CRM contact, CRM account, pipeline-event, draft, task, revenue-record and onboarding queries. Storage is also tenant-prefixed.
 
 The schema uses ordinary foreign keys plus service-level tenant predicates rather than PostgreSQL row-level security. Live PostgreSQL RLS was not claimed.
 
@@ -391,11 +447,11 @@ export PYTHONPATH=apps/api
 # Verify ORM/migration agreement
 .venv/bin/alembic check
 
-# Roll back Phase 8 only
-.venv/bin/alembic downgrade c7d40e02a0b4
+# Roll back Phase 9 only
+.venv/bin/alembic downgrade 0b728736cdd4
 
-# Restore Phase 8
-.venv/bin/alembic upgrade 0b728736cdd4
+# Restore Phase 9
+.venv/bin/alembic upgrade e37c610043af
 ```
 
 Offline PostgreSQL contracts:

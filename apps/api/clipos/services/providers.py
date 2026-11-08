@@ -208,6 +208,20 @@ class ProviderStatusService:
                 else ProviderMode.DISABLED,
                 ["CLIPOS_OPPORTUNITY_PROVIDER"],
             ),
+            (
+                settings.comms_provider,
+                "outbound_communications",
+                ProviderMode.MOCKED if settings.comms_provider == "fake" else ProviderMode.DISABLED,
+                ["CLIPOS_COMMS_PROVIDER"],
+            ),
+            (
+                settings.payments_provider,
+                "payments",
+                ProviderMode.MOCKED
+                if settings.payments_provider == "fake"
+                else ProviderMode.DISABLED,
+                ["CLIPOS_PAYMENTS_PROVIDER"],
+            ),
         ]
         for provider, capability, mode, variable_names in definitions:
             existing = await session.scalar(
