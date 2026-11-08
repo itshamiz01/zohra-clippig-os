@@ -9,7 +9,7 @@ Zohra ClipOS is a safety-first, multi-tenant control plane for AI-assisted short
 5. a Quality Council, structured Rights Guardian, independent human review and mandatory signed safety gates;
 6. provider-neutral publishing, official YouTube OAuth/upload contracts and reconciliation-safe platform job control.
 
-Version: `0.7.0` — phase-gated development release, **not a production release**.
+Version: `0.8.0` — phase-gated development release, **not a production release**.
 
 ## Implemented scope
 
@@ -100,9 +100,20 @@ Version: `0.7.0` — phase-gated development release, **not a production release
 - the learning loop is deterministic rules v1 over stored, reported views only (duration, captions, posting-time and format group comparisons plus a hook-clarity inversion check), with conservative minimum sample sizes and effect thresholds; every recommendation cites its evidence (group statistics, publication ids, fingerprint) and is created `proposed`
 - recommendations are never auto-applied: there is no apply path in Phase 7, approval/rejection requires the reviewer role and is audited, and the generator has no write path to rights, quality, gate, approval, policy/feature-flag or budget tables — a test proves those tables are byte-identical before and after generation, collection and review
 
+### Phase 8 — Opportunity Hunter and commercial fit
+
+- tenant-scoped opportunity sources come in four kinds with truthful adapter states: operator **seed lists** (real-tested local import of a supplied list), **RSS/Atom feeds** (an SSRF-guarded fetcher whose parsing is test-proven through a fake transport but whose network path is **unverified** and disabled unless `CLIPOS_OPPORTUNITY_RSS_ENABLED=true`), **public sites** (disabled — no scraping adapter exists) and **search providers** (disabled by default; an explicitly selected deterministic fake is labelled `mocked` on every record it produces)
+- syncs are durable background jobs (`opportunity.sync`, creatable only through the opportunities domain endpoint) with per-run counts — received, created, merged, duplicates flagged, suppressed skipped — the serving adapter's truthful mode, and sanitized failure categories; a disabled adapter fails its run truthfully with `opportunity_unsupported` and records nothing
+- every imported record is normalised (handles, canonical URLs with tracking parameters stripped, audience/view bands, cadence) and stored with per-field provenance — adapter, fetch time and source URL — plus the raw source record, so every field can be traced to its origin
+- deduplication is conservative: exact identity matches (normalised handle or canonical URL) merge and refresh; fuzzy text matches are only **flagged** via `possible_duplicate_of_id` for human review and are never auto-merged
+- suppressions (creator handle, domain or keyword, created by reviewers with a reason) are enforced at import, immediately hide matching records already in the working list, and are themselves audited
+- commercial fit is explainable and reproducible: six persisted factors (`content_opportunity`, `audience_fit`, `performance_fit`, `contactability`, `rights_feasibility`, `effort_inverse`) with weights, evidence and missing-data behaviour under `opportunity-score-v1`; a factor with no observed data is excluded, never scored as zero, and the same record always reproduces the same score
+- the lifecycle (`new → reviewing → shortlisted/rejected/suppressed`) is audited, and shortlist/reject/suppress are reviewer decisions; records carry a labelled public contact route only — Phase 8 stores no scraped private contact data
+- the Phase 9 handoff is a versioned `opportunity-handoff.v1` package (opportunity, evidence provenance, score components) with `draft → ready` states — **nothing is sent anywhere**: Phase 8 has no outreach surface at all (no email, DM or contact-form code path exists, and a test asserts the route and adapter surface contains none)
+
 ## Intentionally not implemented
 
-Phase 8 and later remain locked. Phase 7 does not implement lead discovery (opportunity hunting), outreach, contracting, payments, billing, autonomous client selection or executive action, and it does not apply recommendations automatically. Real YouTube Analytics collection is **not** implemented: the adapter is an unverified skeleton, no real analytics API call has been made, and no provider metric in this delivery is real evidence — disabled collection records `unavailable`, and the fake adapter's numbers are deterministic test fixtures labelled `mocked`. Meta, TikTok and LinkedIn publishing and analytics, S3 and URL ingestion remain unavailable. No code bypasses authentication, paywalls, CAPTCHA, robots policy or platform controls.
+Phase 9 and later remain locked. Phase 8 does not implement a CRM, sales outreach of any kind, contracting, payments, billing, autonomous client selection or executive action; its handoff packages are draft data for a future Phase 9 and are never transmitted. Real RSS discovery is **not** verified: no live feed has been fetched from this codebase, the adapter is disabled by default, and its numbers are operator- or feed-supplied evidence — seed-list records are operator assertions, not verified live data, and the fake search adapter's records are deterministic test fixtures labelled `mocked`. Real YouTube Analytics collection is **not** implemented: the adapter is an unverified skeleton, no real analytics API call has been made, and no provider metric in this delivery is real evidence — disabled collection records `unavailable`, and the fake adapter's numbers are deterministic test fixtures labelled `mocked`. Meta, TikTok and LinkedIn publishing and analytics, S3 and URL ingestion remain unavailable. No code bypasses authentication, paywalls, CAPTCHA, robots policy or platform controls.
 
 The YouTube publishing adapter has mocked provider-contract evidence only in this delivery. No real Google consent, test-channel upload, processing result or public post was performed, so it is **not** marked real-tested. A succeeded render, passing gate or mocked adapter response is not legal advice, production proof, platform-acceptance guarantee, reach claim or revenue claim.
 
@@ -246,10 +257,11 @@ npm --prefix apps/web audit --audit-level=high
 .venv/bin/pip-audit --progress-spinner off
 ```
 
-Latest backend gate: **160 passed in 124.65s** with **75.02% branch-aware coverage** (70% enforced minimum), including 11 focused Phase 7 analytics/experiment/learning-loop cases and the retained genuine deterministic FFmpeg proof. Ruff and mypy pass on the `clipos` package. Fresh SQLite migration round trip/no-drift and offline PostgreSQL DDL contracts for the Phase 7 revision are recorded in [`docs/PHASE_7_HANDOFF.md`](docs/PHASE_7_HANDOFF.md). The web home page received static Phase 7 status copy only in this phase; frontend lint/typecheck/build were not re-run (dependencies are not installed in this checkout).
+Latest backend gate: **184 passed in 142.82s** with **73.71% branch-aware coverage** (70% enforced minimum; coverage run: 184 passed in 190.80s), including 24 focused Phase 8 opportunity cases (16 test functions; the SSRF guard cases are parametrized) and the retained genuine deterministic FFmpeg proof. Ruff and mypy pass on the `clipos` package; the 7 pre-existing Phase 6 test-file lint errors are unchanged and no new lint debt was added. Fresh SQLite migration round trip/no-drift and offline PostgreSQL DDL contracts for the Phase 8 revision are recorded in [`docs/PHASE_8_HANDOFF.md`](docs/PHASE_8_HANDOFF.md). The web home page received static Phase 8 status copy only in this phase; frontend lint/typecheck/build were not re-run (dependencies are not installed in this checkout). Environment note: the Phase 4 rendering tests are timing- and disk-sensitive on small VMs — a run starved of `/tmp` space fails them environmentally; they pass in a clean run, as this gate did.
 
 ## Documentation
 
+- [`docs/PHASE_8_HANDOFF.md`](docs/PHASE_8_HANDOFF.md) — Phase 8 gate evidence, limitations and Phase 9 stop condition
 - [`docs/PHASE_7_HANDOFF.md`](docs/PHASE_7_HANDOFF.md) — Phase 7 gate evidence, limitations and Phase 8 stop condition
 - [`docs/PHASE_5_HANDOFF.md`](docs/PHASE_5_HANDOFF.md) — Phase 5 gate evidence, limitations and Phase 6 stop condition
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — trust boundaries, worker flow and data model

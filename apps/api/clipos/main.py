@@ -19,6 +19,7 @@ from clipos.api.routes import (
     discovery,
     health,
     jobs,
+    opportunities,
     publishing,
     quality,
     rendering,
@@ -38,6 +39,7 @@ from clipos.core.middleware import (
 from clipos.database import Base, build_engine, build_session_factory
 from clipos.gateways.analytics import build_analytics_adapters
 from clipos.gateways.models import build_model_gateway
+from clipos.gateways.opportunities import build_opportunity_adapters
 from clipos.gateways.publishing import build_publishing_adapters
 from clipos.gateways.transcription import build_transcription_gateway
 from clipos.media.tooling import MediaTooling
@@ -45,6 +47,7 @@ from clipos.models import SystemControl  # noqa: F401 - registers all model meta
 from clipos.queue import InMemoryQueueBroker, QueueBroker, RedisQueueBroker
 from clipos.services.analytics_processing import AnalyticsProcessor
 from clipos.services.asset_processing import AssetProcessingService
+from clipos.services.opportunity_processing import OpportunityProcessor
 from clipos.services.providers import ProviderStatusService
 from clipos.services.publish_processing import PublishProcessor
 from clipos.services.rendering import RenderProcessor
@@ -93,6 +96,7 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         app.state.transcription_gateway = build_transcription_gateway(settings)
         app.state.publishing_adapters = build_publishing_adapters(settings)
         app.state.analytics_adapters = build_analytics_adapters(settings)
+        app.state.opportunity_adapters = build_opportunity_adapters(settings)
         media_tools = MediaTooling(settings)
         app.state.media_tools = media_tools
         media_status = await media_tools.check()
@@ -144,15 +148,22 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
             registry=app.state.analytics_adapters,
             settings=settings,
         )
+        opportunity_processor = OpportunityProcessor(
+            session_factory=session_factory,
+            registry=app.state.opportunity_adapters,
+            settings=settings,
+        )
         app.state.asset_processor = asset_processor
         app.state.render_processor = render_processor
         app.state.publish_processor = publish_processor
         app.state.analytics_processor = analytics_processor
+        app.state.opportunity_processor = opportunity_processor
         worker = ClipOSWorker(
             asset_processor=asset_processor,
             render_processor=render_processor,
             publish_processor=publish_processor,
             analytics_processor=analytics_processor,
+            opportunity_processor=opportunity_processor,
             session_factory=session_factory,
             queue=queue,
             settings=settings,
@@ -176,6 +187,7 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         await app.state.model_gateway.close()
         await app.state.publishing_adapters.close()
         await app.state.analytics_adapters.close()
+        await app.state.opportunity_adapters.close()
         await queue.close()
         await rate_limiter.close()
         await engine.dispose()
@@ -184,14 +196,18 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version=settings.version,
         description=(
-            "Safety-first Phase 7 media control plane with provider-neutral publishing contracts, "
+            "Safety-first Phase 8 media control plane with provider-neutral publishing contracts, "
             "encrypted OAuth credentials, a resumable YouTube adapter, private-first releases, "
             "mandatory fresh quality/rights gates, exact public-visibility approval, durable job "
             "control, and reconciliation-before-retry. Phase 7 adds truthful analytics "
             "collection (missing metrics are never invented zeros), experiments, and a bounded "
             "learning loop whose recommendations require human review and cannot mutate "
-            "rights, quality, policy or budget state. Unrelated providers remain disabled and "
-            "real provider verification is reported separately from mocked evidence."
+            "rights, quality, policy or budget state. Phase 8 adds opportunity hunting: "
+            "tenant-scoped sources (operator seed lists, SSRF-guarded RSS, disabled search), "
+            "conservative dedup with human-reviewed duplicate flags, suppressions, explainable "
+            "commercial-fit scoring, and draft-only Phase 9 handoff packages. Phase 8 has no "
+            "outreach surface: nothing contacts a creator. Unrelated providers remain disabled "
+            "and real provider verification is reported separately from mocked evidence."
         ),
         lifespan=lifespan,
         docs_url=None if settings.environment.value == "production" else "/docs",
@@ -229,14 +245,15 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
     app.include_router(quality.router, prefix=settings.api_prefix)
     app.include_router(publishing.router, prefix=settings.api_prefix)
     app.include_router(analytics.router, prefix=settings.api_prefix)
+    app.include_router(opportunities.router, prefix=settings.api_prefix)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, Any]:
         return {
             "name": settings.app_name,
             "version": settings.version,
-            "phase": 7,
-            "status": "analytics_experiments_bounded_learning",
+            "phase": 8,
+            "status": "opportunity_hunting_commercial_fit_no_outreach",
             "health": "/healthz",
             "readiness": "/readyz",
         }

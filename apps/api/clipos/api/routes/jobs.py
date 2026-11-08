@@ -13,6 +13,7 @@ from clipos.queue import QueueMessage
 from clipos.schemas import JobCreate, JobResponse
 from clipos.services.analytics import ANALYTICS_JOB_KIND
 from clipos.services.jobs import JobService
+from clipos.services.opportunities import OPPORTUNITY_JOB_KIND
 from clipos.services.publishing import PUBLISH_JOB_KIND
 from clipos.services.rendering import RENDER_JOB_KIND, RenderingService
 
@@ -64,7 +65,13 @@ async def create_internal_job(
     principal: Principal = Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> JobResponse:
-    if payload.kind in {"asset.process", RENDER_JOB_KIND, PUBLISH_JOB_KIND, ANALYTICS_JOB_KIND}:
+    if payload.kind in {
+        "asset.process",
+        RENDER_JOB_KIND,
+        PUBLISH_JOB_KIND,
+        ANALYTICS_JOB_KIND,
+        OPPORTUNITY_JOB_KIND,
+    }:
         raise ClipOSError(
             "reserved_job_kind",
             "media job kinds can be created only through their validated domain endpoints",
@@ -113,6 +120,13 @@ async def cancel_job(
             "collection is short and read-only, so trigger a new collection instead",
             status_code=409,
         )
+    if job.kind == OPPORTUNITY_JOB_KIND:
+        raise ClipOSError(
+            "opportunity_job_domain_endpoint_required",
+            "opportunity sync jobs are managed through the opportunities endpoint; "
+            "sync is idempotent, so trigger a new sync instead",
+            status_code=409,
+        )
     if job.kind == RENDER_JOB_KIND:
         render_job_id = await session.scalar(
             select(RenderJob.id).where(
@@ -154,6 +168,13 @@ async def retry_job(
             "analytics_job_domain_endpoint_required",
             "analytics collection jobs are retried by triggering a new collection "
             "through the analytics endpoint",
+            status_code=409,
+        )
+    if job.kind == OPPORTUNITY_JOB_KIND:
+        raise ClipOSError(
+            "opportunity_job_domain_endpoint_required",
+            "opportunity sync jobs are retried by triggering a new sync "
+            "through the opportunities endpoint",
             status_code=409,
         )
     if job.kind == RENDER_JOB_KIND:

@@ -24,10 +24,12 @@ b71f2e44e1fe  Phase 3 explainable clip discovery
     ↓
 d4a9a9290b9a  Phase 6 gated YouTube publishing
     ↓
-c7d40e02a0b4  Phase 7 analytics, experiments and learning (head)
+c7d40e02a0b4  Phase 7 analytics, experiments and learning
+    ↓
+0b728736cdd4  Phase 8 opportunity hunter and commercial fit (head)
 ```
 
-All revisions are additive. Phase 7 does not rewrite an accepted historical migration.
+All revisions are additive. Phase 8 does not rewrite an accepted historical migration.
 
 ## Phase 4 tables
 
@@ -307,9 +309,60 @@ recommendation_kind, recommendation_state
 
 The Phase 7 migration creates exactly these five types on PostgreSQL and drops them on downgrade; `publishing_provider` and `provider_mode` are referenced from earlier migrations without recreation.
 
+## Phase 8 tables
+
+### `opportunity_sources`
+
+One tenant-configured discovery origin:
+
+- tenant, creating user, kind (`seed_list`, `rss_feed`, `public_site`, `search_provider`) and operator name;
+- free-form `config` JSON (an RSS source carries its `feed_url` here; the URL is validated again by the SSRF guard at fetch time);
+- `status` (`enabled`/`disabled`) and the truthful `adapter_mode` of the adapter that most recently served the source;
+- `last_synced_at` for the most recent completed sync.
+
+### `opportunity_sync_runs`
+
+One tenant-scoped import pass over a single source:
+
+- tenant, source (cascade), requesting user (nullable) and optional durable background job (unique);
+- lifecycle state and the serving adapter's truthful `provider_mode`;
+- records received/created/merged, possible duplicates flagged and suppressed records skipped — all check-constrained non-negative;
+- sanitized failure category/message and start/finish timestamps.
+
+### `opportunities`
+
+One discovered creator/content opportunity:
+
+- tenant, source (cascade), optional sync run (set null) and the source's `external_key` — `UNIQUE (tenant_id, source_id, external_key)`;
+- normalised identity and research fields: title, creator name/handle, canonical URL, platform, a *labelled* public contact route (never scraped private contact data), niche, language, audience band and posting cadence;
+- `evidence` JSON carrying per-field provenance (adapter, fetch time, source URL), the scoring signals and the raw source record;
+- `dedup_key` (indexed per tenant) driving conservative exact-match merging, and `possible_duplicate_of_id` (set null) recording a fuzzy match flagged for human review — fuzzy matches are never merged automatically;
+- lifecycle state (`new`, `reviewing`, `shortlisted`, `rejected`, `suppressed`) and the explainable `overall_score` (check-constrained 0–100 when present) with its `score_version`.
+
+### `opportunity_score_components`
+
+One explainable scoring factor per opportunity, mirroring `candidate_score_components`: key, label, meaning, nullable score (NULL when the factor is not applicable), weight, weighted score, applicability flag, evidence list, missing-data behaviour and scoring version. `UNIQUE (opportunity_id, key)`; components are replaced wholesale on every rescore.
+
+### `opportunity_suppressions`
+
+Tenant do-not-import rules: match type (`creator_handle`, `domain`, `keyword`), the normalised match value, a human reason and the creating reviewer. `UNIQUE (tenant_id, match_type, match_value)`. Matches are enforced at import and applied to existing rows when a suppression is created.
+
+### `opportunity_handoffs`
+
+The versioned Phase 9 intake package for one opportunity (`UNIQUE (opportunity_id)`): the `opportunity-handoff.v1` payload JSON (opportunity, evidence provenance, score components, `outreach_status: not_sent`), payload version, state (`draft`, `ready`) and creating user. Creating or marking a handoff ready sends nothing anywhere.
+
+## Phase 8 native enums
+
+```text
+opportunity_source_kind, opportunity_source_status, opportunity_sync_state,
+opportunity_state, suppression_match_type, opportunity_handoff_state
+```
+
+The Phase 8 migration creates exactly these six types on PostgreSQL and drops them on downgrade; `provider_mode` is referenced from Phase 1 without recreation.
+
 ## Tenant isolation
 
-Every Phase 2–7 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant and recommendation queries. Storage is also tenant-prefixed.
+Every Phase 2–8 domain table carries `tenant_id`. Services never authorize by a bare object UUID: tenant predicates are included in candidate, plan, job, output, defect, rights, evaluation, decision, verification, OAuth connection, publication, publication-event, collection-run, snapshot, experiment, variant, recommendation, opportunity-source, sync-run, opportunity, score-component, suppression and handoff queries. Storage is also tenant-prefixed.
 
 The schema uses ordinary foreign keys plus service-level tenant predicates rather than PostgreSQL row-level security. Live PostgreSQL RLS was not claimed.
 
@@ -338,11 +391,11 @@ export PYTHONPATH=apps/api
 # Verify ORM/migration agreement
 .venv/bin/alembic check
 
-# Roll back Phase 7 only
-.venv/bin/alembic downgrade d4a9a9290b9a
+# Roll back Phase 8 only
+.venv/bin/alembic downgrade c7d40e02a0b4
 
-# Restore Phase 7
-.venv/bin/alembic upgrade c7d40e02a0b4
+# Restore Phase 8
+.venv/bin/alembic upgrade 0b728736cdd4
 ```
 
 Offline PostgreSQL contracts:

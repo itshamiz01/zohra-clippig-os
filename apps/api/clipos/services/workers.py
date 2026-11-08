@@ -14,6 +14,8 @@ from clipos.queue import QueueBroker, QueueMessage
 from clipos.services.analytics import ANALYTICS_JOB_KIND
 from clipos.services.analytics_processing import AnalyticsProcessor, AnalyticsWorker
 from clipos.services.asset_processing import AssetProcessingService, AssetWorker
+from clipos.services.opportunities import OPPORTUNITY_JOB_KIND
+from clipos.services.opportunity_processing import OpportunityProcessor, OpportunityWorker
 from clipos.services.publish_processing import PublishProcessor, PublishWorker
 from clipos.services.publishing import PUBLISH_JOB_KIND
 from clipos.services.rendering import RENDER_JOB_KIND, RenderProcessor, RenderWorker
@@ -32,6 +34,7 @@ class ClipOSWorker:
         render_processor: RenderProcessor,
         publish_processor: PublishProcessor,
         analytics_processor: AnalyticsProcessor,
+        opportunity_processor: OpportunityProcessor,
         session_factory: async_sessionmaker[AsyncSession],
         queue: QueueBroker,
         settings: Settings,
@@ -40,6 +43,7 @@ class ClipOSWorker:
         self.render_processor = render_processor
         self.publish_processor = publish_processor
         self.analytics_processor = analytics_processor
+        self.opportunity_processor = opportunity_processor
         self.session_factory = session_factory
         self.queue = queue
         self.settings = settings
@@ -66,6 +70,12 @@ class ClipOSWorker:
             queue=queue,
             settings=settings,
         )
+        self.opportunity_recovery = OpportunityWorker(
+            processor=opportunity_processor,
+            session_factory=session_factory,
+            queue=queue,
+            settings=settings,
+        )
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
@@ -79,6 +89,8 @@ class ClipOSWorker:
                 message = await self.publish_recovery.recover_queued_job()
             if message is None:
                 message = await self.analytics_recovery.recover_queued_job()
+            if message is None:
+                message = await self.opportunity_recovery.recover_queued_job()
             if message is None:
                 await asyncio.sleep(self.settings.worker_poll_seconds)
                 continue
@@ -101,6 +113,8 @@ class ClipOSWorker:
             await self.publish_processor.process_job(message)
         elif message.kind == ANALYTICS_JOB_KIND:
             await self.analytics_processor.process_job(message)
+        elif message.kind == OPPORTUNITY_JOB_KIND:
+            await self.opportunity_processor.process_job(message)
         else:
             await self._fail_unsupported(message)
 

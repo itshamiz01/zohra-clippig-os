@@ -48,6 +48,11 @@ from clipos.core.enums import (
     MembershipStatus,
     MetricAvailability,
     OAuthConnectionState,
+    OpportunityHandoffState,
+    OpportunitySourceKind,
+    OpportunitySourceStatus,
+    OpportunityState,
+    OpportunitySyncState,
     ProviderMode,
     PublishEventKind,
     PublishingProvider,
@@ -63,6 +68,7 @@ from clipos.core.enums import (
     RightsEvidenceStatus,
     RightsScope,
     Role,
+    SuppressionMatchType,
     TenantStatus,
     TranscriptState,
 )
@@ -1648,3 +1654,270 @@ class Recommendation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class OpportunitySource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A tenant-configured origin for Phase 8 opportunity imports.
+
+    ``adapter_mode`` records the truthful mode of the adapter that most
+    recently served this source (seed lists are real-tested local code,
+    RSS is unverified until a live fetch is proven, search and public-site
+    adapters are disabled); it is refreshed on creation and every sync so
+    mocked or disabled evidence can never masquerade as a live source.
+    """
+
+    __tablename__ = "opportunity_sources"
+    __table_args__ = (Index("ix_opportunity_sources_tenant_kind", "tenant_id", "kind"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[OpportunitySourceKind] = mapped_column(
+        Enum(OpportunitySourceKind, name="opportunity_source_kind"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    status: Mapped[OpportunitySourceStatus] = mapped_column(
+        Enum(OpportunitySourceStatus, name="opportunity_source_status"),
+        default=OpportunitySourceStatus.ENABLED,
+        nullable=False,
+    )
+    adapter_mode: Mapped[ProviderMode] = mapped_column(
+        Enum(ProviderMode, name="provider_mode"), default=ProviderMode.DISABLED, nullable=False
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    opportunities: Mapped[list[Opportunity]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+    sync_runs: Mapped[list[OpportunitySyncRun]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+
+
+class OpportunitySyncRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One tenant-scoped opportunity import pass over a single source.
+
+    The run is the durable record of what the sync attempted and what it
+    truthfully did: records received from the adapter, rows created,
+    exact matches merged, possible duplicates flagged for human review
+    (never auto-merged) and records skipped because a suppression matched.
+    """
+
+    __tablename__ = "opportunity_sync_runs"
+    __table_args__ = (
+        Index("ix_opportunity_sync_runs_tenant_state", "tenant_id", "state"),
+        CheckConstraint(
+            "records_received >= 0 AND records_created >= 0 AND records_merged >= 0 "
+            "AND duplicates_flagged >= 0 AND suppressed_skipped >= 0",
+            name="ck_opportunity_sync_runs_counts_nonnegative",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunity_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    background_job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("background_jobs.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
+    state: Mapped[OpportunitySyncState] = mapped_column(
+        Enum(OpportunitySyncState, name="opportunity_sync_state"),
+        default=OpportunitySyncState.QUEUED,
+        nullable=False,
+    )
+    adapter_mode: Mapped[ProviderMode] = mapped_column(
+        Enum(ProviderMode, name="provider_mode"), default=ProviderMode.DISABLED, nullable=False
+    )
+    records_received: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    records_created: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    records_merged: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duplicates_flagged: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    suppressed_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    source: Mapped[OpportunitySource] = relationship(back_populates="sync_runs")
+
+
+class Opportunity(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One discovered creator/content opportunity, pre-Phase-9.
+
+    Phase 8 records evidence and an explainable score only. The
+    ``contact_route_label`` is a human-readable label of a public contact
+    route (for example "business email on channel About page"); ClipOS
+    never stores scraped private contact data and has no code path that
+    contacts anyone.
+    """
+
+    __tablename__ = "opportunities"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "source_id", "external_key", name="uq_opportunity_source_external_key"
+        ),
+        Index("ix_opportunities_tenant_dedup", "tenant_id", "dedup_key"),
+        Index("ix_opportunities_tenant_state", "tenant_id", "state"),
+        CheckConstraint(
+            "overall_score IS NULL OR (overall_score >= 0 AND overall_score <= 100)",
+            name="ck_opportunities_score_range",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunity_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sync_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunity_sync_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    external_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    creator_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    creator_handle: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    canonical_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    contact_route_label: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Provenance per normalised field (adapter, fetched_at, source URL),
+    # the scoring signals consumed by opportunity-score-v1, and the raw
+    # source record, kept so every field can be traced to its origin.
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    niche: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(35), nullable=True)
+    audience_band: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    posting_cadence: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    dedup_key: Mapped[str] = mapped_column(String(600), nullable=False)
+    possible_duplicate_of_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True
+    )
+    state: Mapped[OpportunityState] = mapped_column(
+        Enum(OpportunityState, name="opportunity_state"),
+        default=OpportunityState.NEW,
+        nullable=False,
+    )
+    overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_version: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+
+    source: Mapped[OpportunitySource] = relationship(back_populates="opportunities")
+    score_components: Mapped[list[OpportunityScoreComponent]] = relationship(
+        back_populates="opportunity", cascade="all, delete-orphan"
+    )
+
+
+class OpportunityScoreComponent(UUIDPrimaryKeyMixin, Base):
+    """One explainable Phase 8 scoring factor, mirroring Phase 3."""
+
+    __tablename__ = "opportunity_score_components"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", "key", name="uq_opportunity_score_component_key"),
+        Index("ix_opportunity_score_tenant_opportunity", "tenant_id", "opportunity_id"),
+        CheckConstraint("score IS NULL OR (score >= 0 AND score <= 100)", name="score_range"),
+        CheckConstraint("weight > 0", name="weight_positive"),
+        CheckConstraint("weighted_score >= 0", name="weighted_nonnegative"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    opportunity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    meaning: Mapped[str] = mapped_column(String(500), nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False)
+    weighted_score: Mapped[float] = mapped_column(Float, nullable=False)
+    applicable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list, nullable=False)
+    missing_behavior: Mapped[str] = mapped_column(String(160), nullable=False)
+    scoring_version: Mapped[str] = mapped_column(String(80), nullable=False)
+
+    opportunity: Mapped[Opportunity] = relationship(back_populates="score_components")
+
+
+class OpportunitySuppression(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A tenant-scoped do-not-import rule for Phase 8.
+
+    Suppressions are matched at import time (matching records are skipped)
+    and when a suppression is created it immediately transitions matching
+    existing opportunities to ``suppressed`` so they leave the working
+    list. Suppressed records are never contacted: Phase 8 has no outreach.
+    """
+
+    __tablename__ = "opportunity_suppressions"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "match_type", "match_value", name="uq_opportunity_suppression_match"
+        ),
+        Index("ix_opportunity_suppressions_tenant_type", "tenant_id", "match_type"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    match_type: Mapped[SuppressionMatchType] = mapped_column(
+        Enum(SuppressionMatchType, name="suppression_match_type"), nullable=False
+    )
+    match_value: Mapped[str] = mapped_column(String(500), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class OpportunityHandoff(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """The versioned Phase 9 intake package for one opportunity.
+
+    A handoff is data preparation only: it packages the opportunity, its
+    evidence provenance and its score components into an
+    ``opportunity-handoff.v1`` payload that a future Phase 9 may consume.
+    Nothing is sent anywhere when a handoff is created or marked ready.
+    """
+
+    __tablename__ = "opportunity_handoffs"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", name="uq_opportunity_handoff_opportunity"),
+        Index("ix_opportunity_handoffs_tenant_state", "tenant_id", "state"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    opportunity_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("opportunities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    payload_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    state: Mapped[OpportunityHandoffState] = mapped_column(
+        Enum(OpportunityHandoffState, name="opportunity_handoff_state"),
+        default=OpportunityHandoffState.DRAFT,
+        nullable=False,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )

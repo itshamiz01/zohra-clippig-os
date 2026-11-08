@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Zohra ClipOS"
-    version: str = "0.7.0"
+    version: str = "0.8.0"
     environment: Environment = Environment.DEVELOPMENT
     api_prefix: str = "/api/v1"
     debug: bool = False
@@ -144,6 +144,21 @@ class Settings(BaseSettings):
     # always reported as mocked.
     analytics_provider: Literal["disabled", "fake"] = "disabled"
     youtube_analytics_enabled: bool = False
+
+    # Phase 8 opportunity discovery. Fail-closed: RSS fetching performs
+    # outbound network requests, so it stays disabled unless the operator
+    # explicitly enables it, and every fetch still passes the SSRF guard.
+    # The "fake" source provider exists for tests and local demos only
+    # and is always reported as mocked. Search and public-site sources
+    # have no adapter and report disabled.
+    opportunity_provider: Literal["disabled", "fake"] = "disabled"
+    opportunity_rss_enabled: bool = False
+    opportunity_fetch_timeout_seconds: float = Field(default=10.0, ge=1, le=60)
+    opportunity_fetch_max_bytes: int = Field(
+        default=2 * 1024 * 1024, ge=16 * 1024, le=16 * 1024 * 1024
+    )
+    opportunity_fetch_max_redirects: int = Field(default=3, ge=0, le=5)
+    opportunity_max_import_records: int = Field(default=500, ge=1, le=5000)
 
     embedded_worker_enabled: bool = False
     worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30)
@@ -289,6 +304,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CLIPOS_ANALYTICS_PROVIDER=fake is forbidden in staging/production; "
                 "mocked metrics must never be served as production evidence"
+            )
+        if self.opportunity_provider == "fake" and self.environment in {
+            Environment.STAGING,
+            Environment.PRODUCTION,
+        }:
+            raise ValueError(
+                "CLIPOS_OPPORTUNITY_PROVIDER=fake is forbidden in staging/production; "
+                "mocked opportunities must never be served as production evidence"
             )
         storage_root = self.storage_local_root.resolve()
         render_temp_root = self.render_temp_root.resolve()
@@ -480,6 +503,18 @@ class Settings(BaseSettings):
             (
                 "CLIPOS_YOUTUBE_ANALYTICS_ENABLED",
                 self.youtube_analytics_enabled,
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_OPPORTUNITY_PROVIDER",
+                self.opportunity_provider != "disabled",
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_OPPORTUNITY_RSS_ENABLED",
+                self.opportunity_rss_enabled,
                 False,
                 False,
             ),

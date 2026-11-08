@@ -86,3 +86,25 @@ The matrix above is the Phase 5 record and is retained unchanged. Phase 7 adds t
 ## Phase 7 stop condition
 
 Phase 7 may collect and report analytics truthfully, run experiments as records, and propose evidence-cited recommendations for human review. It may not apply recommendations, select leads, contact anyone, or take any external or commercial action; those remain locked until a separately authorized Phase 8 implementation.
+
+---
+
+# Phase 8 addendum — opportunity discovery truth rows
+
+The matrices above are the Phase 5 and Phase 7 records and are retained unchanged. Phase 8 adds the following rows under the same status vocabulary; Phase 8 test counts are recorded in `docs/PHASE_8_HANDOFF.md`.
+
+| Integration / capability | Adapter | Status | Phase 8 evidence | Remaining proof before production |
+|---|---|---:|---|---|
+| Opportunity import (operator seed lists) | `SeedListAdapter` | **real_tested** | Integration tests: end-to-end import through the durable job, strict record validation, per-field provenance, exact-match merge on re-import with stable IDs | None for local behaviour; record contents remain operator assertions, not verified live data |
+| Opportunity import (RSS/Atom feeds) | `RssFeedAdapter` behind `clipos.core.ssrf` | **unverified** | Parsing/normalisation proven via `httpx.MockTransport` (RSS 2.0 + Atom, cadence derivation, malformed feed fails the run with `rss_parse_failed`); SSRF guard unit-tested for private literals, DNS answers containing private addresses, credential URLs, redirect-to-private, redirect loops, oversized bodies and wrong content types; adapter disabled by default (`CLIPOS_OPPORTUNITY_RSS_ENABLED=false`) | One operator-run live fetch of a real public feed, robots/terms review per feed, then mode promotion |
+| Opportunity discovery (search providers) | `DisabledSearchAdapter` | **disabled** | Capabilities endpoint reports `disabled`; a sync fails its run truthfully with `opportunity_unsupported` and records nothing | A reviewed provider adapter, credentials and a real provider test under a separate authorization |
+| Opportunity discovery (public sites) | `DisabledOpportunityAdapter` | **disabled** | Same truthful failure as search; no scraping code path exists | Per-site robots/terms/authorisation review before any adapter is designed |
+| Opportunity discovery (test/local) | `FakeOpportunityAdapter` | **mocked** | Deterministic records labelled `fake_opportunity_adapter` in every provenance entry; run records `adapter_mode=mocked`; settings validation forbids selecting it in staging/production | Never production evidence |
+| SSRF guard | `clipos.core.ssrf.fetch_public_url` | **real_tested** | Unit tests listed above cover scheme/credential rejection, literal and DNS-resolved private ranges (incl. cloud metadata 169.254.169.254), per-hop redirect revalidation (max 3), byte caps and content-type allowlist | Connection pinning to remove the DNS validation/connect TOCTOU window; live-network behaviour remains unverified |
+| Dedup, suppression and scoring | `OpportunityService` + `opportunity-score-v1` | **real_tested** | Integration tests: exact-match merge, fuzzy match flagged via `possible_duplicate_of_id` and never merged, suppression blocks re-import and hides existing rows, six persisted components with a not-applicable factor excluded (never zero), identical rescore after merge, reviewer-gated lifecycle with audit rows | Editorial calibration of factor weights/thresholds on real discovered corpora (none exist yet) |
+| Phase 9 handoff packages | `opportunity-handoff.v1` payload | **real_tested** | Integration test: draft contents (schema, provenance, six score components, `outreach_status: not_sent`, `phase_9_status: not_implemented`), `draft → ready` transition, ready package cannot be silently rewritten | Phase 9 itself is locked; no consumer exists |
+| Outreach (email, DM, contact forms) | none | **disabled** | No route, adapter method or code path exists; a test asserts the opportunities route table and adapter surface contain no send/outreach/email surface | A separately authorized Phase 9 design with per-action human approval |
+
+## Phase 8 stop condition
+
+Phase 8 may discover, normalise, deduplicate, suppress, score and package opportunities for human review. It may not contact any creator, send anything, or take any external or commercial action; CRM, outreach, contracting and payments remain locked until a separately authorized Phase 9 implementation.
