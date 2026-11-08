@@ -146,6 +146,40 @@ class ProviderStatusService:
             ("meta", "oauth_and_publishing", ProviderMode.DISABLED, []),
             ("tiktok", "oauth_and_publishing", ProviderMode.DISABLED, []),
             ("linkedin", "oauth_and_publishing", ProviderMode.DISABLED, []),
+            (
+                "youtube",
+                "analytics_collection",
+                ProviderMode.UNVERIFIED
+                if settings.youtube_analytics_enabled
+                else ProviderMode.MOCKED
+                if settings.analytics_provider == "fake"
+                else ProviderMode.DISABLED,
+                ["CLIPOS_YOUTUBE_ANALYTICS_ENABLED", "CLIPOS_ANALYTICS_PROVIDER"],
+            ),
+            (
+                "meta",
+                "analytics_collection",
+                ProviderMode.MOCKED
+                if settings.analytics_provider == "fake"
+                else ProviderMode.DISABLED,
+                ["CLIPOS_ANALYTICS_PROVIDER"],
+            ),
+            (
+                "tiktok",
+                "analytics_collection",
+                ProviderMode.MOCKED
+                if settings.analytics_provider == "fake"
+                else ProviderMode.DISABLED,
+                ["CLIPOS_ANALYTICS_PROVIDER"],
+            ),
+            (
+                "linkedin",
+                "analytics_collection",
+                ProviderMode.MOCKED
+                if settings.analytics_provider == "fake"
+                else ProviderMode.DISABLED,
+                ["CLIPOS_ANALYTICS_PROVIDER"],
+            ),
         ]
         for provider, capability, mode, variable_names in definitions:
             existing = await session.scalar(

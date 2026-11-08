@@ -65,3 +65,24 @@ Mocked provider/process-failure tests establish validation and failure behavior 
 ## Stop condition
 
 Phase 5 may create private validated media, structured rights/check evidence, independent approval and non-distributing fresh preflight records. Public publishing and all external commercial integrations remain disabled until a separately authorized Phase 6 implementation calls the mandatory gate at job acceptance and immediately before upload.
+
+---
+
+# Phase 7 addendum — analytics truth rows
+
+The matrix above is the Phase 5 record and is retained unchanged. Phase 7 adds the following rows under the same status vocabulary; Phase 7 test counts are recorded in `docs/PHASE_7_HANDOFF.md`.
+
+| Integration / capability | Adapter | Status | Phase 7 evidence | Remaining proof before production |
+|---|---|---:|---|---|
+| Analytics collection (all providers, default) | `DisabledAnalyticsAdapter` | **disabled** | Integration test: collection over a succeeded publication persists all 9 canonical metrics as `unavailable` with `NULL` values; run records `adapter_mode=disabled` | None for disabled behaviour |
+| Analytics collection (test/local) | `FakeAnalyticsAdapter` | **mocked** | End-to-end integration test: queued job → worker → 9 snapshots (8 `reported`, `conversions` `missing` with `NULL` value, never zero); dedup refresh and stale/permission-denied states persisted truthfully | Never production evidence; the factory refuses `CLIPOS_ANALYTICS_PROVIDER=fake` in staging/production |
+| YouTube Analytics API | `YouTubeAnalyticsAdapter` skeleton | **unverified** | Contract implemented; adapter disabled by default (`CLIPOS_YOUTUBE_ANALYTICS_ENABLED=false`); when explicitly enabled it still makes no provider call and collection fails truthfully with `analytics_unverified`; fail-closed settings validation requires the OAuth client and token key | Operator-completed real provider test with the `yt-analytics.readonly` scope, response-shape verification, then mode promotion |
+| Meta / TikTok / LinkedIn analytics | none | **disabled** | Factory returns the disabled adapter; capabilities endpoint reports `disabled` | Separate reviewed adapters and real provider tests |
+| Metric truth model | `analytics_metric_snapshots` | **real_tested** | DB check constraint + `MetricResult` invariant tests prove unreported metrics cannot carry values; missing-vs-zero distinction asserted end to end | PostgreSQL live migration check remains part of the general unverified PostgreSQL row |
+| Predicted-vs-actual lineage join | publication → render job → render plan → candidate score components | **real_tested** | Integration test joins seeded score components (`hook_clarity`, `narrative_payoff`) to collected metrics and asserts lineage completeness and gap reporting | Broader candidate corpus from real discovery runs |
+| Learning loop (recommendations v1) | deterministic rules over stored snapshots | **real_tested** | Integration test: evidence-cited posting-time recommendation from 6 publications, generation dedup, reviewer-only approve/reject with audit rows, and byte-identical rights/quality/gate/approval/policy/cost/publication tables before and after | Editorial validation of rule thresholds on real provider data (none exists yet) |
+| Recommendation application | none | **disabled** | No apply path exists in Phase 7 by design; the review schema accepts only `approve`/`reject` (an `apply` decision is rejected with 422) | A separately reviewed change process in a later phase |
+
+## Phase 7 stop condition
+
+Phase 7 may collect and report analytics truthfully, run experiments as records, and propose evidence-cited recommendations for human review. It may not apply recommendations, select leads, contact anyone, or take any external or commercial action; those remain locked until a separately authorized Phase 8 implementation.

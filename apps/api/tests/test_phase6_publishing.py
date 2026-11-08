@@ -237,7 +237,7 @@ async def test_private_first_upload_succeeds_with_progress_and_analytics_handoff
     assert body["progress_percent"] == 100
     assert body["provider_publication_id"] == "video-phase6"
     assert body["provider_url"] == "https://youtu.be/video-phase6"
-    assert body["analytics_handoff"]["phase_7_status"] == "not_implemented"
+    assert body["analytics_handoff"]["phase_7_status"] == "implemented"
     assert fake.last_metadata is not None
     assert fake.last_metadata.visibility.value == "private"
     events = await client.get(

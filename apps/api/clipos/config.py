@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Zohra ClipOS"
-    version: str = "0.6.0"
+    version: str = "0.7.0"
     environment: Environment = Environment.DEVELOPMENT
     api_prefix: str = "/api/v1"
     debug: bool = False
@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     youtube_revocation_url: str = "https://oauth2.googleapis.com/revoke"
     youtube_api_base_url: str = "https://www.googleapis.com/youtube/v3"
     youtube_upload_base_url: str = "https://www.googleapis.com/upload/youtube/v3"
+
+    # Phase 7 analytics. Fail-closed like publishing: real YouTube
+    # analytics stays disabled unless explicitly enabled, and even then
+    # the adapter is an unverified skeleton until a provider test passes.
+    # The "fake" provider exists for tests and local demos only and is
+    # always reported as mocked.
+    analytics_provider: Literal["disabled", "fake"] = "disabled"
+    youtube_analytics_enabled: bool = False
 
     embedded_worker_enabled: bool = False
     worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30)
@@ -257,6 +265,31 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "CLIPOS_YOUTUBE_CLIENT_SECRET is required when YouTube publishing is enabled"
                 )
+        if self.youtube_analytics_enabled:
+            if not self.youtube_client_id or not self.youtube_client_id.strip():
+                raise ValueError(
+                    "CLIPOS_YOUTUBE_CLIENT_ID is required when YouTube analytics is enabled"
+                )
+            if not self.youtube_client_secret or not self.youtube_client_secret.get_secret_value():
+                raise ValueError(
+                    "CLIPOS_YOUTUBE_CLIENT_SECRET is required when YouTube analytics is enabled"
+                )
+            if (
+                self.publishing_token_encryption_key is None
+                or len(self.publishing_token_encryption_key.get_secret_value()) < 32
+            ):
+                raise ValueError(
+                    "CLIPOS_PUBLISHING_TOKEN_ENCRYPTION_KEY must contain at least 32 "
+                    "characters when YouTube analytics is enabled"
+                )
+        if self.analytics_provider == "fake" and self.environment in {
+            Environment.STAGING,
+            Environment.PRODUCTION,
+        }:
+            raise ValueError(
+                "CLIPOS_ANALYTICS_PROVIDER=fake is forbidden in staging/production; "
+                "mocked metrics must never be served as production evidence"
+            )
         storage_root = self.storage_local_root.resolve()
         render_temp_root = self.render_temp_root.resolve()
         if (
@@ -435,6 +468,18 @@ class Settings(BaseSettings):
             (
                 "CLIPOS_YOUTUBE_PUBLISHING_ENABLED",
                 self.youtube_publishing_enabled,
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_ANALYTICS_PROVIDER",
+                self.analytics_provider != "disabled",
+                False,
+                False,
+            ),
+            (
+                "CLIPOS_YOUTUBE_ANALYTICS_ENABLED",
+                self.youtube_analytics_enabled,
                 False,
                 False,
             ),

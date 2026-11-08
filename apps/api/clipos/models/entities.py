@@ -27,6 +27,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from clipos.core.enums import (
     ActionClass,
+    AnalyticsCollectionState,
     ApprovalStatus,
     AssetSource,
     AssetState,
@@ -38,12 +39,14 @@ from clipos.core.enums import (
     DiscoveryRunState,
     DiscoveryStrategy,
     EvidenceSource,
+    ExperimentState,
     GateCheckpoint,
     GateOutcome,
     GateReviewAction,
     JobState,
     MediaKind,
     MembershipStatus,
+    MetricAvailability,
     OAuthConnectionState,
     ProviderMode,
     PublishEventKind,
@@ -53,6 +56,8 @@ from clipos.core.enums import (
     QualityCheckKind,
     QualityCheckStatus,
     QualitySeverity,
+    RecommendationKind,
+    RecommendationState,
     RenderState,
     RightsBasis,
     RightsEvidenceStatus,
@@ -1320,6 +1325,10 @@ class Publication(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
+    metric_snapshots: Mapped[list[AnalyticsMetricSnapshot]] = relationship(
+        back_populates="publication", cascade="all, delete-orphan"
+    )
+
 
 class PublicationEvent(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "publication_events"
@@ -1420,3 +1429,222 @@ class SystemControl(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class AnalyticsCollectionRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One tenant-scoped analytics collection pass.
+
+    The run is the durable record of what collection attempted and what it
+    truthfully obtained. ``adapter_mode`` records the mode of the adapter
+    that served the run so mocked or disabled evidence can never be
+    mistaken for real provider data later.
+    """
+
+    __tablename__ = "analytics_collection_runs"
+    __table_args__ = (
+        Index("ix_analytics_runs_tenant_state", "tenant_id", "state"),
+        CheckConstraint(
+            "publications_considered >= 0 AND snapshots_written >= 0 "
+            "AND metrics_reported >= 0 AND metrics_unavailable >= 0",
+            name="ck_analytics_runs_counts_nonnegative",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    background_job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("background_jobs.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
+    provider: Mapped[PublishingProvider | None] = mapped_column(
+        Enum(PublishingProvider, name="publishing_provider"), nullable=True
+    )
+    state: Mapped[AnalyticsCollectionState] = mapped_column(
+        Enum(AnalyticsCollectionState, name="analytics_collection_state"),
+        default=AnalyticsCollectionState.QUEUED,
+        nullable=False,
+    )
+    adapter_mode: Mapped[ProviderMode] = mapped_column(
+        Enum(ProviderMode, name="provider_mode"), default=ProviderMode.DISABLED, nullable=False
+    )
+    publications_considered: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    snapshots_written: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    metrics_reported: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    metrics_unavailable: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failure_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AnalyticsMetricSnapshot(UUIDPrimaryKeyMixin, Base):
+    """One provider metric value (or truthful non-value) for a publication.
+
+    ``value`` is NULL whenever the metric was not REPORTED or STALE; the
+    database check constraint enforces that a missing, unavailable or
+    permission-denied metric can never carry an invented number.
+    """
+
+    __tablename__ = "analytics_metric_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "publication_id",
+            "metric",
+            "window_start",
+            "window_end",
+            "source",
+            name="uq_analytics_snapshot_dedup",
+        ),
+        Index("ix_analytics_snapshots_tenant_publication", "tenant_id", "publication_id"),
+        Index("ix_analytics_snapshots_metric_window", "metric", "window_end"),
+        CheckConstraint(
+            "(availability IN ('REPORTED', 'STALE') AND value IS NOT NULL) "
+            "OR (availability NOT IN ('REPORTED', 'STALE') AND value IS NULL)",
+            name="ck_analytics_snapshot_value_matches_availability",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    publication_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("publications.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    collection_run_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("analytics_collection_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider: Mapped[PublishingProvider] = mapped_column(
+        Enum(PublishingProvider, name="publishing_provider"), nullable=False
+    )
+    provider_publication_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    metric: Mapped[str] = mapped_column(String(80), nullable=False)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit: Mapped[str] = mapped_column(String(40), nullable=False)
+    availability: Mapped[MetricAvailability] = mapped_column(
+        Enum(MetricAvailability, name="metric_availability"), nullable=False
+    )
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(80), nullable=False)
+    metric_definition_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    publication: Mapped[Publication] = relationship(back_populates="metric_snapshots")
+    collection_run: Mapped[AnalyticsCollectionRun | None] = relationship()
+
+
+class Experiment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "experiments"
+    __table_args__ = (Index("ix_experiments_tenant_state", "tenant_id", "state"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    hypothesis: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[ExperimentState] = mapped_column(
+        Enum(ExperimentState, name="experiment_state"),
+        default=ExperimentState.DRAFT,
+        nullable=False,
+    )
+    eligibility: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    success_metric: Mapped[str] = mapped_column(String(80), nullable=False)
+    success_criteria: Mapped[dict[str, Any]] = mapped_column(
+        JSON_DOCUMENT, default=dict, nullable=False
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    variants: Mapped[list[ExperimentVariant]] = relationship(
+        back_populates="experiment", cascade="all, delete-orphan"
+    )
+
+
+class ExperimentVariant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "experiment_variants"
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "name", name="uq_experiment_variant_name"),
+        CheckConstraint(
+            "candidate_id IS NOT NULL OR publication_id IS NOT NULL",
+            name="ck_experiment_variant_linked",
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    experiment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    candidate_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("clip_candidates.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    publication_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("publications.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # What this variant changes (hook text, duration target, caption mode,
+    # posting time or format parameters), kept as reviewed configuration.
+    config: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+
+    experiment: Mapped[Experiment] = relationship(back_populates="variants")
+
+
+class Recommendation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A bounded learning-loop suggestion.
+
+    Recommendations are created only in PROPOSED state by the deterministic
+    generator, carry the evidence they were derived from, and can change
+    production behaviour only after a human review transition. The
+    generator itself has no write path to any other domain table.
+    """
+
+    __tablename__ = "recommendations"
+    __table_args__ = (Index("ix_recommendations_tenant_state", "tenant_id", "state"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[RecommendationKind] = mapped_column(
+        Enum(RecommendationKind, name="recommendation_kind"), nullable=False
+    )
+    state: Mapped[RecommendationState] = mapped_column(
+        Enum(RecommendationState, name="recommendation_state"),
+        default=RecommendationState.PROPOSED,
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Recommendations are authored by the system generator, never by a
+    # user; the reviewer fields below record the human decision instead.
+    created_by: Mapped[str] = mapped_column(String(80), default="system", nullable=False)
+    reviewed_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)

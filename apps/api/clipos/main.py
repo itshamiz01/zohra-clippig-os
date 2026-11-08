@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from clipos.api.routes import (
+    analytics,
     approvals,
     assets,
     auth,
@@ -35,12 +36,14 @@ from clipos.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from clipos.database import Base, build_engine, build_session_factory
+from clipos.gateways.analytics import build_analytics_adapters
 from clipos.gateways.models import build_model_gateway
 from clipos.gateways.publishing import build_publishing_adapters
 from clipos.gateways.transcription import build_transcription_gateway
 from clipos.media.tooling import MediaTooling
 from clipos.models import SystemControl  # noqa: F401 - registers all model metadata
 from clipos.queue import InMemoryQueueBroker, QueueBroker, RedisQueueBroker
+from clipos.services.analytics_processing import AnalyticsProcessor
 from clipos.services.asset_processing import AssetProcessingService
 from clipos.services.providers import ProviderStatusService
 from clipos.services.publish_processing import PublishProcessor
@@ -89,6 +92,7 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         app.state.model_gateway = build_model_gateway(settings)
         app.state.transcription_gateway = build_transcription_gateway(settings)
         app.state.publishing_adapters = build_publishing_adapters(settings)
+        app.state.analytics_adapters = build_analytics_adapters(settings)
         media_tools = MediaTooling(settings)
         app.state.media_tools = media_tools
         media_status = await media_tools.check()
@@ -135,13 +139,20 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
             registry=app.state.publishing_adapters,
             settings=settings,
         )
+        analytics_processor = AnalyticsProcessor(
+            session_factory=session_factory,
+            registry=app.state.analytics_adapters,
+            settings=settings,
+        )
         app.state.asset_processor = asset_processor
         app.state.render_processor = render_processor
         app.state.publish_processor = publish_processor
+        app.state.analytics_processor = analytics_processor
         worker = ClipOSWorker(
             asset_processor=asset_processor,
             render_processor=render_processor,
             publish_processor=publish_processor,
+            analytics_processor=analytics_processor,
             session_factory=session_factory,
             queue=queue,
             settings=settings,
@@ -164,6 +175,7 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         await app.state.transcription_gateway.close()
         await app.state.model_gateway.close()
         await app.state.publishing_adapters.close()
+        await app.state.analytics_adapters.close()
         await queue.close()
         await rate_limiter.close()
         await engine.dispose()
@@ -172,10 +184,13 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version=settings.version,
         description=(
-            "Safety-first Phase 6 media control plane with provider-neutral publishing contracts, "
+            "Safety-first Phase 7 media control plane with provider-neutral publishing contracts, "
             "encrypted OAuth credentials, a resumable YouTube adapter, private-first releases, "
             "mandatory fresh quality/rights gates, exact public-visibility approval, durable job "
-            "control, and reconciliation-before-retry. Unrelated providers remain disabled and "
+            "control, and reconciliation-before-retry. Phase 7 adds truthful analytics "
+            "collection (missing metrics are never invented zeros), experiments, and a bounded "
+            "learning loop whose recommendations require human review and cannot mutate "
+            "rights, quality, policy or budget state. Unrelated providers remain disabled and "
             "real provider verification is reported separately from mocked evidence."
         ),
         lifespan=lifespan,
@@ -213,14 +228,15 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
     app.include_router(rendering.router, prefix=settings.api_prefix)
     app.include_router(quality.router, prefix=settings.api_prefix)
     app.include_router(publishing.router, prefix=settings.api_prefix)
+    app.include_router(analytics.router, prefix=settings.api_prefix)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, Any]:
         return {
             "name": settings.app_name,
             "version": settings.version,
-            "phase": 6,
-            "status": "gated_private_first_publishing",
+            "phase": 7,
+            "status": "analytics_experiments_bounded_learning",
             "health": "/healthz",
             "readiness": "/readyz",
         }

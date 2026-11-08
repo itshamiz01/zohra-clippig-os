@@ -321,3 +321,51 @@ class PublishEventKind(StrEnum):
     CANCELLATION_REQUESTED = "cancellation_requested"
     CANCELLED = "cancelled"
     RETRY_QUEUED = "retry_queued"
+
+
+class MetricAvailability(StrEnum):
+    """Truth state of one collected metric.
+
+    ``value`` is only meaningful for REPORTED and STALE. MISSING means the
+    provider does not expose the metric for this publication, UNAVAILABLE
+    means collection could not obtain it, and PERMISSION_DENIED means the
+    connected account lacks the analytics scope. A metric that was not
+    reported must never be persisted as an invented zero.
+    """
+
+    REPORTED = "reported"
+    MISSING = "missing"
+    UNAVAILABLE = "unavailable"
+    PERMISSION_DENIED = "permission_denied"
+    STALE = "stale"
+
+
+class AnalyticsCollectionState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    PARTIALLY_SUCCEEDED = "partially_succeeded"
+    FAILED = "failed"
+
+
+class ExperimentState(StrEnum):
+    DRAFT = "draft"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class RecommendationKind(StrEnum):
+    HOOK = "hook"
+    DURATION = "duration"
+    CAPTIONS = "captions"
+    POSTING_TIME = "posting_time"
+    FORMAT = "format"
+
+
+class RecommendationState(StrEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    APPLIED = "applied"

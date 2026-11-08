@@ -9,7 +9,7 @@ Zohra ClipOS is a safety-first, multi-tenant control plane for AI-assisted short
 5. a Quality Council, structured Rights Guardian, independent human review and mandatory signed safety gates;
 6. provider-neutral publishing, official YouTube OAuth/upload contracts and reconciliation-safe platform job control.
 
-Version: `0.6.0` — phase-gated development release, **not a production release**.
+Version: `0.7.0` — phase-gated development release, **not a production release**.
 
 ## Implemented scope
 
@@ -88,11 +88,23 @@ Version: `0.6.0` — phase-gated development release, **not a production release
 - generic jobs cannot create, retry or cancel publishing work around the publishing-specific authorization path
 - `/publishing` presents truthful capability status, connection scope/expiry/reconnect state, private-first release controls, progress, visibility, failures, immutable events, safe retry/cancel and manual next steps
 
+### Phase 7 — Analytics, experimentation and a bounded learning loop
+
+- every succeeded publication's Phase 6 `clipos-analytics-handoff.v1` blob is now consumed by tenant-scoped analytics collection; the handoff reports `phase_7_status: implemented`
+- metric snapshots persist an explicit availability state — `reported`, `missing`, `unavailable`, `permission_denied` or `stale` — and a database check constraint makes it impossible to store a value for a metric that was not reported: a missing metric is `NULL`, never an invented zero
+- collection runs are durable background jobs (`analytics.collect`, creatable only through the analytics domain endpoint) with per-run counts, the serving adapter's truthful mode, and sanitized failure categories; snapshots dedup on (publication, metric, day-grained window, source) and refresh in place
+- the analytics gateway mirrors publishing: a disabled-by-default adapter that records every canonical metric as unavailable, a deterministic fake adapter labelled `mocked` on every snapshot it produces, and a YouTube Analytics skeleton that is **unverified** — it makes no provider call and fails collection truthfully with `analytics_unverified` until an operator completes a real provider test with the `yt-analytics.readonly` scope
+- performance queries expose per-publication latest metrics with availability counts, campaign rollups over `campaign_reference` (sums for additive metrics, view-weighted average view duration, means for percentages; nothing is summed that should not be), and a usage-cost summary whose attribution limits are stated in the response — cost events are per provider operation, not per publication
+- predicted-vs-actual joins discovery score components (including `hook_clarity`) to collected metrics through the publication → render job → render plan → candidate lineage, and reports lineage gaps explicitly instead of fabricating a join
+- experiments are tenant-scoped records with a validated canonical success metric, a guarded lifecycle (`draft → running → paused → completed`, `cancelled`) that requires at least one candidate- or publication-linked variant before running, and audited transitions
+- the learning loop is deterministic rules v1 over stored, reported views only (duration, captions, posting-time and format group comparisons plus a hook-clarity inversion check), with conservative minimum sample sizes and effect thresholds; every recommendation cites its evidence (group statistics, publication ids, fingerprint) and is created `proposed`
+- recommendations are never auto-applied: there is no apply path in Phase 7, approval/rejection requires the reviewer role and is audited, and the generator has no write path to rights, quality, gate, approval, policy/feature-flag or budget tables — a test proves those tables are byte-identical before and after generation, collection and review
+
 ## Intentionally not implemented
 
-Phase 7 and later remain locked. Phase 6 does not implement analytics attribution, a learning loop, lead discovery, outreach, contracting, payments, billing, autonomous client selection or executive action. Meta, TikTok and LinkedIn publishing, S3 and URL ingestion remain unavailable. No code bypasses authentication, paywalls, CAPTCHA, robots policy or platform controls.
+Phase 8 and later remain locked. Phase 7 does not implement lead discovery (opportunity hunting), outreach, contracting, payments, billing, autonomous client selection or executive action, and it does not apply recommendations automatically. Real YouTube Analytics collection is **not** implemented: the adapter is an unverified skeleton, no real analytics API call has been made, and no provider metric in this delivery is real evidence — disabled collection records `unavailable`, and the fake adapter's numbers are deterministic test fixtures labelled `mocked`. Meta, TikTok and LinkedIn publishing and analytics, S3 and URL ingestion remain unavailable. No code bypasses authentication, paywalls, CAPTCHA, robots policy or platform controls.
 
-The YouTube adapter has mocked provider-contract evidence only in this delivery. No real Google consent, test-channel upload, processing result or public post was performed, so it is **not** marked real-tested. A succeeded render, passing gate or mocked adapter response is not legal advice, production proof, platform-acceptance guarantee, reach claim or revenue claim.
+The YouTube publishing adapter has mocked provider-contract evidence only in this delivery. No real Google consent, test-channel upload, processing result or public post was performed, so it is **not** marked real-tested. A succeeded render, passing gate or mocked adapter response is not legal advice, production proof, platform-acceptance guarantee, reach claim or revenue claim.
 
 ## Quick start (local development)
 
@@ -234,10 +246,11 @@ npm --prefix apps/web audit --audit-level=high
 .venv/bin/pip-audit --progress-spinner off
 ```
 
-Latest backend gate: **134 passed in 48.65s** with **75.37% branch-aware coverage** (70% enforced minimum), including 19 focused Phase 5 rights/quality/gate cases and the retained genuine deterministic FFmpeg proof. Ruff and strict mypy passed. The frontend passed Oxlint, strict TypeScript and an optimized eleven-route Next.js build including `/quality`. Fresh SQLite migration round trip/no-drift, offline PostgreSQL DDL contracts, dependency audits, authenticated runtime smoke, secret-pattern scanning and clean-archive verification are recorded in [`docs/PHASE_5_HANDOFF.md`](docs/PHASE_5_HANDOFF.md).
+Latest backend gate: **160 passed in 124.65s** with **75.02% branch-aware coverage** (70% enforced minimum), including 11 focused Phase 7 analytics/experiment/learning-loop cases and the retained genuine deterministic FFmpeg proof. Ruff and mypy pass on the `clipos` package. Fresh SQLite migration round trip/no-drift and offline PostgreSQL DDL contracts for the Phase 7 revision are recorded in [`docs/PHASE_7_HANDOFF.md`](docs/PHASE_7_HANDOFF.md). The web home page received static Phase 7 status copy only in this phase; frontend lint/typecheck/build were not re-run (dependencies are not installed in this checkout).
 
 ## Documentation
 
+- [`docs/PHASE_7_HANDOFF.md`](docs/PHASE_7_HANDOFF.md) — Phase 7 gate evidence, limitations and Phase 8 stop condition
 - [`docs/PHASE_5_HANDOFF.md`](docs/PHASE_5_HANDOFF.md) — Phase 5 gate evidence, limitations and Phase 6 stop condition
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — trust boundaries, worker flow and data model
 - [`docs/SECURITY.md`](docs/SECURITY.md) — rendering threat model and controls
