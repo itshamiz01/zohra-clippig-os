@@ -109,6 +109,38 @@ class ScoreComponentResponse(BaseModel):
     scoring_version: str
 
 
+class ContentDebtComponentResponse(StrictSchema):
+    key: str
+    label: str
+    meaning: str
+    max_points: float
+    score: float | None
+    points: float
+    applicable: bool
+    evidence: list[str]
+    missing_behavior: str
+
+
+class ContentDebtResponse(StrictSchema):
+    """The v2.1 content-debt view of one opportunity.
+
+    Computed on read from recorded intake facts only; ``partial`` and
+    ``coverage_percent`` state plainly how much of the score rests on
+    recorded inputs, and the unused-moments figure is exposed as an
+    estimate together with the assumption that produced it.
+    """
+
+    score: float | None
+    coverage_percent: float
+    partial: bool
+    components: list[ContentDebtComponentResponse]
+    estimated_content_opportunities: int | None
+    moments_per_episode: int
+    estimate_basis: str | None
+    rationale: str
+    scoring_version: str
+
+
 class OpportunityResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -130,6 +162,11 @@ class OpportunityResponse(BaseModel):
     state: OpportunityState
     overall_score: float | None
     score_version: str
+    library_episode_count: int | None = None
+    library_long_form_hours: float | None = None
+    existing_shorts_count: int | None = None
+    moments_per_episode_assumption: int | None = None
+    content_debt: ContentDebtResponse | None = None
     possible_duplicate_of_id: UUID | None
     created_at: datetime
     updated_at: datetime

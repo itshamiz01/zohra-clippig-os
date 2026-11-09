@@ -467,6 +467,10 @@ class RevenueKind(StrEnum):
     PAYMENT = "payment"
     REFUND = "refund"
     RECURRING = "recurring"
+    # v2.1: money actually collected from a clipping campaign payout.
+    # Recorded only through the campaign payout endpoint, always with
+    # ``campaign_id`` set, and reported in its own bucket.
+    CAMPAIGN_PAYOUT = "campaign_payout"
 
 
 class RevenueState(StrEnum):
@@ -596,3 +600,56 @@ class ExecutiveProposalState(StrEnum):
     PROPOSED = "proposed"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+class CampaignSourceKind(StrEnum):
+    """How a v2.1 campaign record entered the system.
+
+    ``manual`` is a single operator-created record; ``seed_import`` is a
+    batch of owner-supplied listings handed to the import endpoint.
+    There is deliberately no scraped or fetched kind: no external
+    campaign source is connected, and nothing in v2.1 reads campaign
+    data from the web.
+    """
+
+    MANUAL = "manual"
+    SEED_IMPORT = "seed_import"
+
+
+class CampaignRightsBasis(StrEnum):
+    """The recorded basis on which campaign content may be used.
+
+    ``unknown`` is the fail-closed default: a campaign whose rights
+    basis is unknown can never be qualified, because qualification is
+    the point where ClipOS commits production effort to someone else's
+    content.
+    """
+
+    AUTHORIZED = "authorized"
+    LICENSED = "licensed"
+    PUBLIC_DOMAIN = "public_domain"
+    UNKNOWN = "unknown"
+
+
+class CampaignStatus(StrEnum):
+    """Campaign lifecycle. ``expired`` is normally computed on read
+    (a stored candidate/qualified/active campaign whose deadline has
+    passed reads as expired) but may also be recorded explicitly;
+    ``completed`` and ``rejected`` are terminal."""
+
+    CANDIDATE = "candidate"
+    QUALIFIED = "qualified"
+    ACTIVE = "active"
+    SUBMITTED = "submitted"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+class CampaignAssessmentState(StrEnum):
+    """Profitability assessment outcome. ``unassessable`` is a recorded
+    result, not an error: it names the inputs that are missing instead
+    of inventing a CPM or an audience size."""
+
+    ASSESSABLE = "assessable"
+    UNASSESSABLE = "unassessable"

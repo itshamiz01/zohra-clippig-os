@@ -271,6 +271,7 @@ class RevenueResponse(BaseModel):
     external_reference: str | None
     occurred_at: datetime
     notes: str | None
+    campaign_id: UUID | None = None
     created_by_user_id: UUID
     created_at: datetime
     updated_at: datetime
@@ -289,6 +290,7 @@ class RevenueCurrencyTotals(StrictSchema):
     collected: int
     refunded: int
     recurring: int
+    campaign_payout: int = 0
 
 
 class RevenueSummaryResponse(StrictSchema):

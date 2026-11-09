@@ -118,6 +118,41 @@ class SeedListAdapter:
                 f"record {index} field 'third_party_compilation' must be a boolean",
             )
 
+        def optional_count(name: str) -> int | None:
+            raw_value = record.get(name)
+            if raw_value is None:
+                return None
+            if not isinstance(raw_value, int) or isinstance(raw_value, bool) or raw_value < 0:
+                raise OpportunityAdapterError(
+                    "seed_list_record_invalid",
+                    f"record {index} field {name!r} must be a non-negative integer",
+                )
+            return raw_value
+
+        hours_raw = record.get("library_long_form_hours")
+        if hours_raw is None:
+            long_form_hours: float | None = None
+        elif (
+            isinstance(hours_raw, bool) or not isinstance(hours_raw, (int, float)) or hours_raw < 0
+        ):
+            raise OpportunityAdapterError(
+                "seed_list_record_invalid",
+                f"record {index} field 'library_long_form_hours' must be a non-negative number",
+            )
+        else:
+            long_form_hours = float(hours_raw)
+        moments_raw = record.get("moments_per_episode")
+        if moments_raw is not None and (
+            not isinstance(moments_raw, int)
+            or isinstance(moments_raw, bool)
+            or moments_raw < 1
+            or moments_raw > 100
+        ):
+            raise OpportunityAdapterError(
+                "seed_list_record_invalid",
+                f"record {index} field 'moments_per_episode' must be an integer in 1..100",
+            )
+
         values: dict[str, Any] = {
             "external_key": external_key,
             "title": title,
@@ -133,6 +168,10 @@ class SeedListAdapter:
             "sample_item_count": sample_raw,
             "recent_views_band": normalize_band(text("recent_views_band"), VIEWS_BANDS),
             "third_party_compilation": compilation,
+            "library_episode_count": optional_count("library_episode_count"),
+            "library_long_form_hours": long_form_hours,
+            "existing_shorts_count": optional_count("existing_shorts_count"),
+            "moments_per_episode": moments_raw,
         }
         provenance = {
             name: FieldProvenance(

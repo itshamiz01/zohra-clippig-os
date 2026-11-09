@@ -11,9 +11,10 @@ Zohra ClipOS is a safety-first, multi-tenant control plane for AI-assisted short
 7. analytics collection, experimentation and a bounded learning loop;
 8. opportunity discovery, deduplication, suppression and explainable commercial-fit scoring;
 9. a sales CRM with evidence-cited drafts, onboarding and honestly separated revenue records;
-10. a bounded executive layer: deterministic planning from trusted state, a closed registry of internal actions, human approvals, kill switches, cost ceilings and agent contracts.
+10. a bounded executive layer: deterministic planning from trusted state, a closed registry of internal actions, human approvals, kill switches, cost ceilings and agent contracts;
+11. campaign economics: operator-supplied campaign records with append-only profitability assessments, rights-gated qualification, publication attribution and payouts recorded as revenue records, plus a content-debt score for discovered creators.
 
-Version: `1.0.0` — all build phases (1–10) are implemented. **This is not a production release and the version number is not a production-readiness claim**: Phase 11 is the production readiness audit and controlled launch, and its verdict — not this version — decides whether the system may run in production.
+Version: `1.1.0` — all build phases (1–10) are implemented, plus v2.1 campaign economics (see below). **This is not a production release and the version number is not a production-readiness claim**: Phase 11 is the production readiness audit and controlled launch, and its verdict — not this version — decides whether the system may run in production.
 
 ## Implemented scope
 
@@ -136,6 +137,14 @@ Version: `1.0.0` — all build phases (1–10) are implemented. **This is not a 
 - free text is data, never instructions: titles and text from opportunities, transcripts and records reach plans only inside the cited evidence snapshot, action payloads are validated against strict schemas with no extra fields, and a test proves an instruction-laden opportunity title cannot smuggle a forbidden action into a plan
 - self-improvement is a decision record, not a mechanism: `ExecutiveProposal` rows (scoring weights, prompts, policies, planner rules) can be created, reviewed and approved or rejected — and approval changes **nothing** by itself; applying an approved proposal is a manual, separately audited configuration change outside this system, and no apply path exists
 - `CLIPOS_EXECUTIVE_ENABLED=false` fails the layer closed (planner runs, plan creation, submission and execution queueing are refused); costs are internal orchestration estimates in minor units, kept distinct from provider spend evidence
+
+### v2.1 — Campaign economics (Campaign Hunter, content debt, payout attribution)
+
+- campaigns are **operator-supplied records** (single manual creates or an owner-supplied seed import): name, platform, sponsor, CPM rate, maximum payout, budget, minimum views, deadline, content restrictions, account requirements, submission process and a recorded rights basis, each with its source kind and source reference as provenance. **No external campaign source is connected and nothing scrapes one** — there is no Whop (or any other) fetcher in this codebase
+- profitability is an **append-only assessment** (`Expected Profit = expected views × CPM / 1000 − editing − model − distribution − risk adjustment`, gross capped at a recorded maximum payout): cost inputs are explicit per-assessment values or the recorded `CLIPOS_CAMPAIGN_*` defaults, the risk adjustment is a recorded percentage, and a campaign missing a CPM or an expected-views figure is **unassessable** — the assessment names the missing inputs instead of inventing numbers; recomputation creates a new row and never edits history
+- qualification is gated: `candidate → qualified` requires a recorded rights basis (never `unknown`) **and** a computable assessment, or an explicit override whose reason is stored on the campaign and flagged in the audit event; deadlines flag campaigns as expired on read without mutating stored status
+- collected campaign money exists **only** as Phase 9 revenue records of the new kind `campaign_payout` (status `paid`, linked to the campaign and a CRM account, currency-checked against the campaign), created through the existing revenue service — there is no parallel money table, and expected profit (assessments) and collected payouts are reported side by side in `GET /campaigns/summary`, never combined; the Phase 10 executive action registry is **unchanged** — campaigns surface through the summary endpoint only
+- Phase 8 opportunities gain a **Content Debt Score** (`content-debt-v1`) beside the untouched commercial score: the blueprint's seven factors (long-form hours 25, utilisation gap 25, commercial potential 20, audience size 10, posting consistency 10, contactability 5, niche compatibility 5) computed only from recorded intake facts (library episode count, long-form hours, existing-shorts count); every unrecorded factor is unscored, lowers the reported coverage and marks the result partial, and the estimated unused-moments figure (`episodes × assumed moments per episode − existing shorts`) is always exposed with the assumption that produced it
 
 ## Intentionally not implemented
 
@@ -283,10 +292,11 @@ npm --prefix apps/web audit --audit-level=high
 .venv/bin/pip-audit --progress-spinner off
 ```
 
-Latest backend gate: **216 passed in 192.75s** with **73% branch-aware coverage** (70% enforced minimum; coverage run: 216 passed in 261.38s), including 18 focused Phase 10 executive cases and the retained genuine deterministic FFmpeg proof. Ruff and mypy pass on the `clipos` package (mypy: 134 source files); the 7 pre-existing Phase 6 test-file lint errors are unchanged and no new lint debt was added. Fresh SQLite migration round trip/no-drift and offline PostgreSQL DDL contracts for the Phase 10 revision are recorded in [`docs/PHASE_10_HANDOFF.md`](docs/PHASE_10_HANDOFF.md). The web home page received static Phase 10 status copy only in this phase; frontend lint/typecheck/build were not re-run (dependencies are not installed in this checkout). Environment note: the Phase 4 rendering tests are timing- and disk-sensitive on small VMs — a run starved of `/tmp` space fails them environmentally; they pass in a clean run, as this gate did.
+Latest backend gate: **241 passed in 219.28s** with **73% branch-aware coverage** (70% enforced minimum; coverage run: 241 passed in 312.68s), including 25 focused v2.1 campaign-economics cases. Ruff and mypy pass on the `clipos` package (mypy: 138 source files); the 7 pre-existing Phase 6 test-file lint errors are unchanged and no new lint debt was added. Migration `ed6bc3ed6804` round trip with zero metadata drift on SQLite and a full upgrade/downgrade/re-upgrade chain on disposable PostgreSQL (65 tables) are recorded in [`docs/V2_1_HANDOFF.md`](docs/V2_1_HANDOFF.md). The web home page received no v2.1 copy (backend-first release); frontend lint/typecheck/build were not re-run (dependencies are not installed in this checkout). Environment note: the test fixtures' 5-second application-startup timeout is sensitive to test-temp filesystem latency on small VMs — a run whose temp directory sits on a slow shared mount fails environmentally en masse; the gate above ran with the temp directory on tmpfs, with disk space monitored, and passed cleanly in a single run.
 
 ## Documentation
 
+- [`docs/V2_1_HANDOFF.md`](docs/V2_1_HANDOFF.md) — v2.1 campaign economics gate evidence, the profitability and content-debt design decisions, limitations and the real/mocked/disabled labelling
 - [`docs/PHASE_10_HANDOFF.md`](docs/PHASE_10_HANDOFF.md) — Phase 10 gate evidence, the action-registry and proposal design decisions, limitations and Phase 11 stop condition
 - [`docs/PHASE_9_HANDOFF.md`](docs/PHASE_9_HANDOFF.md) — Phase 9 gate evidence, limitations, the provider decisions still owed and Phase 10 stop condition
 - [`docs/PHASE_8_HANDOFF.md`](docs/PHASE_8_HANDOFF.md) — Phase 8 gate evidence, limitations and Phase 9 stop condition

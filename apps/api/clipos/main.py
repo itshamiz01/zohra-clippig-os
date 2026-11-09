@@ -15,6 +15,7 @@ from clipos.api.routes import (
     approvals,
     assets,
     auth,
+    campaigns,
     crm,
     diagnostics,
     discovery,
@@ -239,7 +240,15 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
             "cost ceilings and a kill switch that is re-checked between actions, on top of "
             "the platform pause. Self-improvement proposals can be recorded and approved "
             "but never applied from inside the system. Unrelated providers remain disabled "
-            "and real provider verification is reported separately from mocked evidence."
+            "and real provider verification is reported separately from mocked evidence. "
+            "v2.1 adds campaign economics: operator-supplied campaign records (manual or "
+            "seed import — no external campaign source is connected and nothing scrapes), "
+            "append-only profitability assessments that name their missing inputs instead "
+            "of inventing a CPM or audience, rights-gated qualification with a recorded "
+            "override path, publication attribution, and payouts recorded only as Phase 9 "
+            "campaign_payout revenue records, reported separately from expected profit. "
+            "Phase 8 opportunities gain a content-debt score computed from recorded "
+            "library facts, with partial coverage stated plainly."
         ),
         lifespan=lifespan,
         docs_url=None if settings.environment.value == "production" else "/docs",
@@ -280,6 +289,7 @@ def create_app(runtime_settings: Settings | None = None) -> FastAPI:
     app.include_router(opportunities.router, prefix=settings.api_prefix)
     app.include_router(crm.router, prefix=settings.api_prefix)
     app.include_router(executive.router, prefix=settings.api_prefix)
+    app.include_router(campaigns.router, prefix=settings.api_prefix)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, Any]:
